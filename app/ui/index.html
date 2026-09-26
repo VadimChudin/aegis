@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEGIS</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>AEGIS</div>
+    <div class="pill symbol" id="symbol">XAU</div>
+    <nav class="segmented" id="timeframes" aria-label="Timeframe"></nav>
+    <div class="spacer"></div>
+    <div class="feed" id="feed" data-state="off"><span class="lamp"></span><span id="feedText">Offline</span></div>
+    <button class="broker" id="brokerButton" type="button">Connect broker</button>
+  </header>
+
+  <main class="layout">
+    <section class="card chart-card">
+      <div class="chart-head">
+        <div class="price" id="lastPrice">—</div>
+        <div class="muted" id="chartMeta">No broker</div>
+      </div>
+      <div class="chart" id="chart"></div>
+      <div class="empty" id="empty">
+        <h2>No broker connected</h2>
+        <p>AEGIS shows gold only from the broker you are logged in to.</p>
+        <button class="primary" id="emptyConnect" type="button">Connect broker</button>
+      </div>
+    </section>
+
+    <aside class="card side">
+      <h3>Strategies</h3>
+      <div id="strategies" class="strategies"></div>
+      <p class="muted small">Slots only. Strategy logic lands in later versions.</p>
+    </aside>
+  </main>
+
+  <div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="sheet">
+      <header>
+        <h2 id="modalTitle">Connect broker</h2>
+        <button class="icon" id="modalClose" type="button" aria-label="Close">×</button>
+      </header>
+      <nav class="segmented wide" id="brokerTabs"></nav>
+      <div class="venue" id="venue"></div>
+      <form id="form" autocomplete="off">
+        <div id="fields" class="fields"></div>
+        <div class="error hidden" id="formError"></div>
+        <footer>
+          <button class="ghost hidden" id="disconnect" type="button">Disconnect</button>
+          <div class="spacer"></div>
+          <button class="primary" id="connect" type="button">Connect</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <script src="vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

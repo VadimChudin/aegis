@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            targets: ""
+            args: --bundles nsis
+          - os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles dmg
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: npm install
+        working-directory: app
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          args: ${{ matrix.args }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: AEGIS ${{ github.ref_name }}
+          releaseDraft: false

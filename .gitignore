@@ -1,0 +1,11 @@
+/target/
+app/node_modules/
+app/src-tauri/gen/
+/shots/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+Thumbs.db
+*.log
+.env

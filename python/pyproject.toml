@@ -1,0 +1,16 @@
+[project]
+name = "aegis-lab"
+version = "0.1.0"
+description = "AEGIS Python side: MetaTrader 5 bridge now, research, backtests and GA later"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+mt5 = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["aegis_lab*"]
