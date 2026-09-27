@@ -1846,3 +1846,259 @@ details.adv[open] > summary {
 .theme-card.on .theme-name {
   color: var(--ink);
 }
+
+/* ---- strategy panel (Bounce) ---------------------------------------------- */
+.panel.strategy {
+  width: min(1180px, calc(100vw - 48px));
+}
+.panel.strategy #panelBody {
+  overflow: hidden;
+  padding-right: 0;
+}
+.bt-cols {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.1fr);
+  gap: 18px;
+  min-height: 0;
+}
+.bt-col {
+  max-height: calc(100vh - 210px);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll) transparent;
+}
+.bt-presets,
+.bt-btns,
+.bt-run {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.ghost.sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.bt-group {
+  border-top: 1px solid var(--hair);
+  padding: 6px 0;
+}
+.bt-group > summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 650;
+  font-size: 13px;
+  padding: 6px 0;
+  color: var(--ink);
+}
+.bt-group > summary::-webkit-details-marker {
+  display: none;
+}
+.bt-group > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+.bt-group[open] > summary::before {
+  content: "▾ ";
+}
+.bt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+.bt-label {
+  flex: 1 1 auto;
+  color: var(--muted);
+}
+.bt-row.slider .bt-label {
+  flex: 0 0 44%;
+}
+.bt-row input[type="range"],
+.bt-range input[type="range"] {
+  flex: 1 1 auto;
+  accent-color: var(--apple);
+  min-width: 0;
+}
+.bt-row output {
+  min-width: 64px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-size: 12px;
+}
+.bt-row .toggle {
+  transform: scale(0.85);
+}
+.bt-filter {
+  padding: 4px 8px 6px;
+  margin: 4px 0;
+  border-radius: 12px;
+}
+.bt-filter.on {
+  background: var(--fill);
+}
+.bt-filter:not(.on) .bt-range {
+  opacity: 0.45;
+}
+.bt-range {
+  display: flex;
+  gap: 8px;
+}
+.tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: var(--fill-strong);
+  color: var(--muted);
+  margin-left: 4px;
+}
+.rq {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 20px;
+  margin-top: 4px;
+}
+.rq i {
+  flex: 1;
+  background: var(--fill-strong);
+  border-radius: 3px 3px 0 0;
+}
+.rq i.up {
+  background: color-mix(in srgb, var(--pos) 70%, transparent);
+}
+.rq i.down {
+  background: color-mix(in srgb, var(--neg) 70%, transparent);
+}
+.bt-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.bt-card {
+  background: var(--fill);
+  border-radius: 14px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bt-card span,
+.bt-card em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+.bt-card strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.bt-equity {
+  width: 100%;
+  height: 120px;
+  background: var(--fill);
+  border-radius: 14px;
+  margin: 6px 0 10px;
+}
+.bt-equity path {
+  fill: none;
+  stroke: var(--pos);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.bt-equity line {
+  stroke: var(--hair);
+  vector-effect: non-scaling-stroke;
+}
+.bt-table {
+  margin: 10px 0;
+}
+.bt-sub {
+  font-weight: 650;
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+.bt-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.bt-table th {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 3px 6px;
+}
+.bt-table td {
+  text-align: right;
+  padding: 3px 6px;
+  border-top: 1px solid var(--hair);
+}
+.bt-table td:first-child,
+.bt-table th:first-child {
+  text-align: left;
+}
+.bt-table tr[data-trade] {
+  cursor: pointer;
+}
+.bt-table tr[data-trade]:hover,
+.bt-table tr.sel {
+  background: var(--fill);
+}
+.bt-table .pos {
+  color: var(--pos);
+}
+.bt-table .neg {
+  color: var(--neg);
+}
+.bt-empty {
+  padding: 30px 10px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+}
+.spinner {
+  width: 26px;
+  height: 26px;
+  margin: 0 auto 12px;
+  border-radius: 99px;
+  border: 3px solid var(--fill-strong);
+  border-top-color: var(--apple);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.bt-bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--hair);
+  font-size: 12px;
+}
+.bt-bar[hidden] {
+  display: none;
+}
+/* the strategy panel sits over the chart and its empty-state box: keep it opaque */
+.panel.strategy.glass {
+  background: var(--select-bg);
+}
+.bt-bar #btBarLive {
+  white-space: nowrap;
+}

@@ -1,6 +1,6 @@
 # AEGIS
 
-Desktop terminal for automated gold (XAU) trading. **v0.2.0:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, and four empty strategy slots. It does not place orders.
+Desktop terminal for automated gold (XAU) trading. **v0.3.0:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, and the **Bounce** strategy with sliders, a win-probability model and a backtest. It does not place orders yet.
 
 ## What works
 
@@ -13,7 +13,8 @@ Desktop terminal for automated gold (XAU) trading. **v0.2.0:** the gold chart fr
   - RoboForex: Python, MetaTrader5 package, MT5 login, terminal connected, Algo Trading button, trading allowed, gold symbol and spread, balance.
 - **Saved credentials:** stored in `settings.json` in the app config folder, every field encrypted (AES-256-GCM) with a key bound to this computer and user. Secrets are never sent back to the window. *Connect on start* reconnects saved brokers when AEGIS opens; *Forget* removes them.
 - **Design and themes** from Vespera: Glass dark, Glass light, Glass blue.
-- **Strategies:** Breakout, Bounce, Liquidity Sweep, DATA are listed as stubs that never signal.
+- **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m history (public archive, no key) and shows the result; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability. Research: [`docs/research/bounce.md`](docs/research/bounce.md).
+- **Strategies:** Breakout, Liquidity Sweep and DATA are still stubs.
 
 ## Connecting
 
@@ -28,10 +29,11 @@ MT5 has no network API, so AEGIS starts a small Python process (`python/aegis_la
 ## Layout
 
 ```
-crates/aegis-core/     Rust: market types, Binance / Bybit / MT5 connectors and checks, settings, strategy registry
+crates/aegis-core/     Rust: market types, Binance / Bybit / MT5 connectors and checks, settings, strategy registry,
+                       bounce/ (levels, touch metrics, probability model, backtest)
 app/src-tauri/         Rust: Tauri 2 window, commands, live feed
 app/ui/                window UI (plain HTML/JS, Vespera styles, TradingView Lightweight Charts)
-python/aegis_lab/      Python: MT5 bridge now; research, backtests and GA later
+python/aegis_lab/      Python: MT5 bridge, Binance archive downloader, research scripts
 scripts/mock_venues.py local Binance/Bybit stand-in for development and tests
 ```
 
@@ -58,7 +60,7 @@ AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit AEGIS_CONFIG_DIR=/tmp/aegis-dev carg
 Bump the version in `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/package.json`, add a `CHANGELOG` entry, then push a tag:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 GitHub Actions builds `AEGIS_<ver>_x64-setup.exe` (Windows) and `AEGIS_<ver>_universal.dmg` (macOS, Apple Silicon + Intel, ad-hoc signed; first launch needs *System Settings → Privacy & Security → Open Anyway*).

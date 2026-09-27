@@ -48,6 +48,9 @@ pub struct Settings {
     pub timeframe: Timeframe,
     #[serde(default)]
     brokers: BTreeMap<BrokerId, BrokerSettings>,
+    /// Strategy id → its settings (sliders and toggles), as JSON.
+    #[serde(default)]
+    pub strategies: BTreeMap<String, serde_json::Value>,
 }
 
 fn default_theme() -> String {
@@ -65,6 +68,7 @@ impl Default for Settings {
             chart_broker: None,
             timeframe: default_timeframe(),
             brokers: BTreeMap::new(),
+            strategies: BTreeMap::new(),
         }
     }
 }
@@ -139,6 +143,14 @@ impl SettingsStore {
         if THEMES.contains(&theme) {
             self.data.theme = theme.into();
         }
+    }
+
+    pub fn set_strategy(&mut self, id: &str, value: serde_json::Value) {
+        self.data.strategies.insert(id.to_string(), value);
+    }
+
+    pub fn strategy(&self, id: &str) -> Option<&serde_json::Value> {
+        self.data.strategies.get(id)
     }
 
     pub fn set_chart(&mut self, broker: Option<BrokerId>, timeframe: Timeframe) {
