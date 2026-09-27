@@ -167,6 +167,9 @@ mod tests {
                 binance_spot_url: Some(base),
                 ..Default::default()
             },
+            history: Mutex::new(None),
+            cache_dir: std::env::temp_dir(),
+            binance_public: String::new(),
         };
         let fields = |secret: &str| {
             BTreeMap::from([
