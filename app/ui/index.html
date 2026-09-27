@@ -54,6 +54,10 @@
               <span class="px" id="legendPx"></span>
             </div>
             <div id="chart"></div>
+            <div class="bt-bar" id="btBar" hidden>
+              <span id="btBarText">Backtest</span>
+              <button type="button" class="ghost sm" id="btBarLive">Back to live</button>
+            </div>
             <div class="chart-empty" id="empty">
               <div class="box">
                 <div class="brand-row" id="emptyIcons"></div>
@@ -91,5 +95,6 @@
 
     <script src="vendor/lightweight-charts.standalone.production.js"></script>
     <script src="app.js"></script>
+    <script src="bounce.js"></script>
   </body>
 </html>
