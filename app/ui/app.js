@@ -128,6 +128,7 @@
 
   async function loadChart(broker) {
     if (!broker || !S.sessions[broker]) return;
+    if (S.btView) window.AEGIS.bounce?.leaveBacktestView(true);
     S.chart.broker = broker;
     const tf = S.chart.tf;
     clearChart();
@@ -145,6 +146,7 @@
       chart.timeScale().setVisibleLogicalRange({ from: data.candles.length - 160, to: data.candles.length + 6 });
       showLast(last);
       setLamp("ok", `Live · ${S.infos[broker].name}`);
+      window.AEGIS.bounce?.onLiveChart();
     } catch (err) {
       if (String(err) === "superseded") return;
       setLamp("halt", String(err));
@@ -283,7 +285,7 @@
     $("statChart").textContent = info ? `${info.name} · ${session.symbol}` : "—";
     $("btnBrokers").hidden = connected.length > 0;
 
-    const empty = !b;
+    const empty = !b && !S.btView;
     $("empty").hidden = !empty;
     if (empty) {
       const busy = S.order.some((id) => S.busy[id]);
@@ -301,10 +303,13 @@
       ...list.map((s) => {
         const chip = document.createElement("button");
         chip.type = "button";
-        chip.className = "strategy-chip soon";
-        chip.title = `${s.summary} Coming in a later version.`;
-        chip.innerHTML = `<span></span><span class="v-opt-tag">soon</span>`;
+        const ready = s.status !== "stub";
+        chip.className = `strategy-chip${ready ? "" : " soon"}`;
+        chip.dataset.strategy = s.id;
+        chip.title = ready ? s.summary : `${s.summary} Coming in a later version.`;
+        chip.innerHTML = ready ? `<span></span><span class="v-opt-tag">backtest</span>` : `<span></span><span class="v-opt-tag">soon</span>`;
         chip.firstChild.textContent = s.name;
+        if (ready) chip.onclick = () => openPanel(s.id);
         return chip;
       }),
     );
@@ -390,8 +395,9 @@
 
   function closePanel() {
     $("panel").hidden = true;
-    $("panel").classList.remove("wide");
+    $("panel").classList.remove("wide", "strategy");
     $("backdrop").hidden = true;
+    document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
     document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("on", b.dataset.panel === "chart"));
   }
@@ -409,6 +415,11 @@
       const firstOff = S.order.find((id) => !S.sessions[id]) || S.order[0];
       S.openCard = focus || S.openCard || firstOff;
       renderBrokersPanel();
+    } else if (kind === "bounce" && window.AEGIS.bounce) {
+      $("panelTitle").textContent = "Bounce";
+      $("panel").classList.add("wide", "strategy");
+      document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
+      window.AEGIS.bounce.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = "Theme";
       $("panel").classList.remove("wide");
@@ -561,6 +572,22 @@
       if (!payload.ok) log(`Feed: ${payload.message}`, "bad");
     });
   }
+
+  // Shared with strategy panels (bounce.js).
+  window.AEGIS = {
+    invoke,
+    log,
+    esc,
+    S,
+    chart,
+    candles,
+    volumes,
+    clearChart,
+    setLamp,
+    closePanel,
+    renderChartChrome,
+    reloadLive: () => (S.chart.broker ? loadChart(S.chart.broker) : (clearChart(), setLamp("off", "Offline"), renderChartChrome())),
+  };
 
   // ---- boot ---------------------------------------------------------------------
 

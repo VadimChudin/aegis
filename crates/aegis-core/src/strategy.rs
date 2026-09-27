@@ -1,5 +1,5 @@
-//! Strategy slots. v0.1 ships the four slots as stubs: they are listed in the
-//! window and wired into the registry, but never produce a signal.
+//! Strategy slots. Bounce has settings and a backtest (`crate::bounce`); the other slots are
+//! stubs. No slot produces live signals or orders yet.
 
 use serde::Serialize;
 
@@ -9,6 +9,8 @@ use crate::market::Candle;
 #[serde(rename_all = "lowercase")]
 pub enum StrategyStatus {
     Stub,
+    /// Settings and backtest work; no live orders yet.
+    Backtest,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -41,6 +43,9 @@ pub trait Strategy: Send {
 
 macro_rules! stub {
     ($ty:ident, $id:literal, $name:literal, $summary:literal) => {
+        stub!($ty, $id, $name, $summary, Stub);
+    };
+    ($ty:ident, $id:literal, $name:literal, $summary:literal, $status:ident) => {
         #[derive(Default)]
         pub struct $ty;
 
@@ -50,7 +55,7 @@ macro_rules! stub {
                     id: $id,
                     name: $name,
                     summary: $summary,
-                    status: StrategyStatus::Stub,
+                    status: StrategyStatus::$status,
                 }
             }
 
@@ -71,7 +76,8 @@ stub!(
     Bounce,
     "bounce",
     "Bounce",
-    "Fades a level that holds: entry against the approach, stop behind the level."
+    "Limit order at a level, stop behind it; trades only touches the win-probability model rates highly. Backtest only (no live orders yet).",
+    Backtest
 );
 stub!(
     LiquiditySweep,
@@ -104,17 +110,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn four_stub_slots_with_unique_ids() {
+    fn four_slots_with_unique_ids() {
         let names: Vec<_> = catalog().iter().map(|s| s.name).collect();
         assert_eq!(names, ["Breakout", "Bounce", "Liquidity Sweep", "DATA"]);
         let mut ids: Vec<_> = catalog().iter().map(|s| s.id).collect();
         ids.dedup();
         assert_eq!(ids.len(), 4);
-        assert!(catalog().iter().all(|s| s.status == StrategyStatus::Stub));
+        for s in catalog() {
+            let want = if s.id == "bounce" {
+                StrategyStatus::Backtest
+            } else {
+                StrategyStatus::Stub
+            };
+            assert_eq!(s.status, want, "{}", s.id);
+        }
     }
 
     #[test]
-    fn stubs_never_signal() {
+    fn no_slot_signals_live_yet() {
         let bar = Candle {
             time: 0,
             open: 1.0,

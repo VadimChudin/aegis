@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bounce_cmd;
+
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -32,6 +34,9 @@ struct Session {
     summary: AccountSummary,
 }
 
+/// (loaded at, bars, source) of the backtest history.
+type CachedHistory = (std::time::Instant, Arc<Vec<aegis_core::bounce::Bar>>, String);
+
 struct AppState {
     settings: Mutex<SettingsStore>,
     /// Every connected broker. Binance, Bybit and RoboForex can be open together.
@@ -42,6 +47,10 @@ struct AppState {
     /// Bumped on every chart load; the window drops events from older feeds.
     generation: AtomicU64,
     options: ConnectOptions,
+    history: Mutex<Option<CachedHistory>>,
+    cache_dir: PathBuf,
+    /// Public futures API for the latest klines (no key needed).
+    binance_public: String,
 }
 
 impl AppState {
@@ -345,6 +354,15 @@ fn setup_state(app: &AppHandle) -> AppState {
         .map(PathBuf::from)
         .or_else(|| app.path().app_config_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| dir.join("cache"))
+        .join("history");
+    let binance_public = options
+        .binance_url
+        .clone()
+        .unwrap_or_else(|| "https://fapi.binance.com".into());
     AppState {
         settings: Mutex::new(SettingsStore::open(dir.join("settings.json"))),
         sessions: Mutex::new(HashMap::new()),
@@ -352,6 +370,9 @@ fn setup_state(app: &AppHandle) -> AppState {
         feed: std::sync::Mutex::new(None),
         generation: AtomicU64::new(0),
         options,
+        history: Mutex::new(None),
+        cache_dir,
+        binance_public,
     }
 }
 
@@ -372,7 +393,11 @@ fn main() {
             set_auto_connect,
             set_theme,
             load_chart,
-            stop_chart
+            stop_chart,
+            bounce_cmd::bounce_info,
+            bounce_cmd::bounce_save,
+            bounce_cmd::bounce_backtest,
+            bounce_cmd::bounce_live
         ])
         .build(tauri::generate_context!())
         .expect("failed to start AEGIS");
