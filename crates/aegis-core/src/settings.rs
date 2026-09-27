@@ -171,8 +171,8 @@ impl SettingsStore {
 
     /// Merges a submitted form into the stored fields: a filled field replaces
     /// the stored value, an empty secret keeps it, an empty plain field clears it.
-    /// Returns the merged, decrypted fields.
-    pub fn apply_form(&mut self, id: BrokerId, form: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    /// Returns the merged, decrypted fields without saving them.
+    pub fn merged_form(&self, id: BrokerId, form: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         let mut merged = self.credentials(id);
         for f in id.info().fields {
             let value = form.get(f.key).map(|v| v.trim()).unwrap_or("");
@@ -182,6 +182,12 @@ impl SettingsStore {
                 merged.remove(f.key);
             }
         }
+        merged
+    }
+
+    /// Returns the merged, decrypted fields and saves them.
+    pub fn apply_form(&mut self, id: BrokerId, form: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let merged = self.merged_form(id, form);
         let encrypted = merged.iter().map(|(k, v)| (k.clone(), self.encrypt(v))).collect();
         self.entry(id).fields = encrypted;
         merged
