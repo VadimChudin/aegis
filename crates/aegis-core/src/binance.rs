@@ -5,7 +5,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::{
-    broker::{network, read_json, require, BrokerError},
+    broker::{network, read_json, require, BrokerError, Probe},
+    checks::{clock, Checklist},
     market::{int, num, Candle, Timeframe},
     sign::{hmac_sha256_hex, now_ms},
 };
@@ -13,33 +14,150 @@ use crate::{
 pub(crate) const SYMBOL: &str = "XAUUSDT";
 const VENUE: &str = "Binance";
 const DEFAULT_URL: &str = "https://fapi.binance.com";
+const DEFAULT_SPOT_URL: &str = "https://api.binance.com";
 const MAX_LIMIT: usize = 1500;
+
+const AFTER_REACH: [(&str, &str); 6] = [
+    ("clock", "Clock in sync"),
+    ("symbol", "XAUUSDT listed"),
+    ("key", "API key accepted"),
+    ("perms", "Key permissions"),
+    ("mode", "Position mode"),
+    ("balance", "USDT balance"),
+];
 
 pub struct Binance {
     http: reqwest::Client,
     base: String,
+    spot: String,
     key: String,
     secret: String,
 }
 
 impl Binance {
-    pub(crate) fn new(base: Option<String>, key: &str, secret: &str) -> Result<Self, BrokerError> {
+    pub(crate) fn new(
+        base: Option<String>,
+        spot: Option<String>,
+        key: &str,
+        secret: &str,
+    ) -> Result<Self, BrokerError> {
+        let trim = |u: String| u.trim_end_matches('/').to_string();
         Ok(Self {
             http: http_client()?,
-            base: base
-                .unwrap_or_else(|| DEFAULT_URL.into())
-                .trim_end_matches('/')
-                .to_string(),
+            base: trim(base.unwrap_or_else(|| DEFAULT_URL.into())),
+            spot: trim(spot.unwrap_or_else(|| DEFAULT_SPOT_URL.into())),
             key: require(key, "API key")?,
-            secret: require(secret, "API secret")?,
+            secret: require(secret, "Secret key")?,
         })
     }
 
-    /// Signed balance request: proves the key works and names the account.
-    pub(crate) async fn verify(&self) -> Result<String, BrokerError> {
-        let query = format!("recvWindow=5000&timestamp={}", now_ms());
+    pub(crate) async fn probe(self) -> Probe<Self> {
+        let mut list = Checklist::default();
+        let started = now_ms();
+        match self.public("/fapi/v1/time").await {
+            Err(e) => {
+                list.fail("reach", "Binance reachable", e.to_string());
+                list.skip(&AFTER_REACH);
+                return Probe {
+                    conn: None,
+                    checks: list,
+                    account: None,
+                };
+            }
+            Ok(body) => {
+                list.ok("reach", "Binance reachable", host(&self.base));
+                let local = (started + now_ms()) / 2;
+                clock(&mut list, int(&body["serverTime"]).unwrap_or(local) - local);
+            }
+        }
+
+        match self.public("/fapi/v1/exchangeInfo").await {
+            Ok(body) => symbol_check(&mut list, &body),
+            Err(e) => list.warn("symbol", "XAUUSDT listed", format!("could not read exchange info: {e}")),
+        }
+
+        let usdt = match self.signed(&self.base, "/fapi/v2/balance", "").await {
+            Ok(body) => {
+                list.ok("key", "API key accepted", "signed request to the futures account works");
+                body.as_array()
+                    .and_then(|assets| assets.iter().find(|a| a["asset"] == "USDT"))
+                    .and_then(|a| num(&a["balance"]))
+                    .unwrap_or(0.0)
+            }
+            Err(e) => {
+                list.fail("key", "API key accepted", e.to_string());
+                list.skip(&AFTER_REACH[3..]);
+                return Probe {
+                    conn: None,
+                    checks: list,
+                    account: None,
+                };
+            }
+        };
+
+        match self.signed(&self.spot, "/sapi/v1/account/apiRestrictions", "").await {
+            Ok(body) => permissions_check(&mut list, &body),
+            Err(e) => list.warn("perms", "Key permissions", format!("could not read them: {e}")),
+        }
+
+        match self.signed(&self.base, "/fapi/v1/positionSide/dual", "").await {
+            Ok(body) if body["dualSidePosition"] == true => list.warn(
+                "mode",
+                "Position mode",
+                "Hedge mode. AEGIS trades one-way: switch in Futures → Preferences → Position Mode",
+            ),
+            Ok(_) => list.ok("mode", "Position mode", "One-way"),
+            Err(e) => list.warn("mode", "Position mode", format!("could not read it: {e}")),
+        }
+
+        if usdt > 0.0 {
+            list.ok(
+                "balance",
+                "USDT balance",
+                format!("{usdt:.2} USDT in the futures wallet"),
+            );
+        } else {
+            list.warn(
+                "balance",
+                "USDT balance",
+                "No USDT in the futures wallet (fine for charts, needed to trade)",
+            );
+        }
+        Probe {
+            conn: Some(self),
+            checks: list,
+            account: Some(format!("USDT {usdt:.2}")),
+        }
+    }
+
+    pub(crate) async fn candles(&self, tf: Timeframe, limit: usize) -> Result<Vec<Candle>, BrokerError> {
+        let path = format!(
+            "/fapi/v1/klines?symbol={SYMBOL}&interval={}&limit={}",
+            tf.as_str(),
+            limit.clamp(1, MAX_LIMIT)
+        );
+        parse_klines(&self.public(&path).await?)
+    }
+
+    async fn public(&self, path: &str) -> Result<Value, BrokerError> {
+        let resp = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .send()
+            .await
+            .map_err(network)?;
+        let (status, body) = read_json(VENUE, resp).await?;
+        if !status.is_success() {
+            return Err(api_error(&body, status));
+        }
+        Ok(body)
+    }
+
+    async fn signed(&self, base: &str, path: &str, params: &str) -> Result<Value, BrokerError> {
+        let sep = if params.is_empty() { "" } else { "&" };
+        let query = format!("{params}{sep}recvWindow=5000&timestamp={}", now_ms());
         let signature = hmac_sha256_hex(&self.secret, &query);
-        let url = format!("{}/fapi/v2/balance?{query}&signature={signature}", self.base);
+        let url = format!("{base}{path}?{query}&signature={signature}");
         let resp = self
             .http
             .get(url)
@@ -51,29 +169,65 @@ impl Binance {
         if !status.is_success() {
             return Err(api_error(&body, status));
         }
-        let usdt = body
-            .as_array()
-            .and_then(|assets| assets.iter().find(|a| a["asset"] == "USDT"))
-            .and_then(|a| num(&a["balance"]));
-        Ok(match usdt {
-            Some(b) => format!("USDT {b:.2}"),
-            None => "futures account".into(),
-        })
+        Ok(body)
     }
+}
 
-    pub(crate) async fn candles(&self, tf: Timeframe, limit: usize) -> Result<Vec<Candle>, BrokerError> {
-        let url = format!(
-            "{}/fapi/v1/klines?symbol={SYMBOL}&interval={}&limit={}",
-            self.base,
-            tf.as_str(),
-            limit.clamp(1, MAX_LIMIT)
-        );
-        let resp = self.http.get(url).send().await.map_err(network)?;
-        let (status, body) = read_json(VENUE, resp).await?;
-        if !status.is_success() {
-            return Err(api_error(&body, status));
+fn host(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+}
+
+fn symbol_check(list: &mut Checklist, body: &Value) {
+    let found = body["symbols"]
+        .as_array()
+        .and_then(|s| s.iter().find(|s| s["symbol"] == SYMBOL));
+    match found {
+        None => list.fail(
+            "symbol",
+            "XAUUSDT listed",
+            "not offered on this Binance endpoint (region or account type)",
+        ),
+        Some(s) if s["status"] == "TRADING" => {
+            let kind = s["contractType"].as_str().unwrap_or("perpetual");
+            list.ok("symbol", "XAUUSDT listed", format!("trading · {kind}"));
         }
-        parse_klines(&body)
+        Some(s) => list.fail(
+            "symbol",
+            "XAUUSDT listed",
+            format!("status {}", s["status"].as_str().unwrap_or("unknown")),
+        ),
+    }
+}
+
+fn permissions_check(list: &mut Checklist, body: &Value) {
+    if body["enableReading"] != true {
+        list.fail("perms", "Key permissions", "Enable Reading is off");
+        return;
+    }
+    let mut notes = Vec::new();
+    if body["enableWithdrawals"] == true {
+        notes.push("Withdrawals are enabled: turn them off for this key");
+    }
+    if body["ipRestrict"] != true {
+        notes.push("no IP restriction");
+    }
+    if body["enableFutures"] != true {
+        notes.push("Futures trading is off (fine while AEGIS only reads)");
+    }
+    if notes.is_empty() {
+        list.ok(
+            "perms",
+            "Key permissions",
+            "Reading + Futures, IP-restricted, no withdrawals",
+        );
+    } else {
+        list.warn("perms", "Key permissions", notes.join("; "));
     }
 }
 
@@ -128,6 +282,14 @@ pub(crate) fn parse_klines(body: &Value) -> Result<Vec<Candle>, BrokerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checks::CheckStatus;
+
+    fn run(f: impl FnOnce(&mut Checklist)) -> (CheckStatus, String) {
+        let mut l = Checklist::default();
+        f(&mut l);
+        let c = l.into_vec().remove(0);
+        (c.status, c.detail)
+    }
 
     #[test]
     fn parses_futures_klines() {
@@ -157,5 +319,33 @@ mod tests {
             api_error(&body, reqwest::StatusCode::UNAUTHORIZED),
             BrokerError::Auth { .. }
         ));
+    }
+
+    #[test]
+    fn permission_rules() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        let safe = v(r#"{"enableReading":true,"enableFutures":true,"ipRestrict":true,"enableWithdrawals":false}"#);
+        assert_eq!(run(|l| permissions_check(l, &safe)).0, CheckStatus::Ok);
+        let risky = v(r#"{"enableReading":true,"enableFutures":true,"ipRestrict":true,"enableWithdrawals":true}"#);
+        let (status, detail) = run(|l| permissions_check(l, &risky));
+        assert_eq!(status, CheckStatus::Warn);
+        assert!(detail.contains("Withdrawals"), "{detail}");
+        assert_eq!(
+            run(|l| permissions_check(l, &v(r#"{"enableReading":false}"#))).0,
+            CheckStatus::Fail
+        );
+    }
+
+    #[test]
+    fn symbol_rules() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        let listed = v(r#"{"symbols":[{"symbol":"XAUUSDT","status":"TRADING","contractType":"TRADIFI_PERPETUAL"}]}"#);
+        assert_eq!(run(|l| symbol_check(l, &listed)).0, CheckStatus::Ok);
+        assert_eq!(run(|l| symbol_check(l, &v(r#"{"symbols":[]}"#))).0, CheckStatus::Fail);
+        let closed = v(r#"{"symbols":[{"symbol":"XAUUSDT","status":"SETTLING"}]}"#);
+        assert_eq!(
+            run(|l| symbol_check(l, &closed)),
+            (CheckStatus::Fail, "status SETTLING".into())
+        );
     }
 }

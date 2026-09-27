@@ -1,63 +1,95 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AEGIS</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <header class="top">
-    <div class="brand"><span class="mark" aria-hidden="true"></span>AEGIS</div>
-    <div class="pill symbol" id="symbol">XAU</div>
-    <nav class="segmented" id="timeframes" aria-label="Timeframe"></nav>
-    <div class="spacer"></div>
-    <div class="feed" id="feed" data-state="off"><span class="lamp"></span><span id="feedText">Offline</span></div>
-    <button class="broker" id="brokerButton" type="button">Connect broker</button>
-  </header>
+<html lang="en" data-theme="glass-dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AEGIS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <div class="app">
+      <header class="chrome">
+        <div class="chrome-left">
+          <div class="brand">
+            <img class="brand-mark" src="assets/icon.png" alt="" />
+            <div class="brand-name">AEGIS</div>
+          </div>
+          <div class="chrome-picks">
+            <div class="hdr-slot" id="hdrBroker"></div>
+            <div class="hdr-slot" id="hdrTf"></div>
+          </div>
+        </div>
+        <div class="chrome-center">
+          <div class="broker-dots" id="brokerDots"></div>
+        </div>
+        <div class="chrome-right">
+          <span class="lamp" id="feedLamp" data-on="0" title="Offline"></span>
+          <button class="cta" id="btnBrokers" type="button">Brokers</button>
+          <button class="ghost-round" id="btnMenu" type="button" title="Menu">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <circle cx="6" cy="12" r="1.6" />
+              <circle cx="12" cy="12" r="1.6" />
+              <circle cx="18" cy="12" r="1.6" />
+            </svg>
+          </button>
+        </div>
+      </header>
 
-  <main class="layout">
-    <section class="card chart-card">
-      <div class="chart-head">
-        <div class="price" id="lastPrice">—</div>
-        <div class="muted" id="chartMeta">No broker</div>
-      </div>
-      <div class="chart" id="chart"></div>
-      <div class="empty" id="empty">
-        <h2>No broker connected</h2>
-        <p>AEGIS shows gold only from the broker you are logged in to.</p>
-        <button class="primary" id="emptyConnect" type="button">Connect broker</button>
-      </div>
+      <main class="stage">
+        <aside class="rail glass" id="rail">
+          <button class="rail-item on" data-panel="chart" type="button"><span class="ico">⌂</span><span>AEGIS</span></button>
+          <button class="rail-item" data-panel="brokers" type="button"><span class="ico">▣</span><span>Brokers</span></button>
+          <button class="rail-item" data-panel="theme" type="button"><span class="ico">⚙</span><span>Settings</span></button>
+          <div class="rail-sep"></div>
+          <div class="rail-label">Strategies</div>
+          <div id="strategyList" class="strategy-list"></div>
+        </aside>
+
+        <section class="chart-wrap glass">
+          <div class="chart-frame">
+            <div class="chart-legend">
+              <span class="sym" id="legendSym">XAU</span>
+              <span id="legendMeta">No broker</span>
+              <span class="px" id="legendPx"></span>
+            </div>
+            <div id="chart"></div>
+            <div class="chart-empty" id="empty">
+              <div class="box">
+                <div class="brand-row" id="emptyIcons"></div>
+                <h3 id="emptyTitle">No broker connected</h3>
+                <p id="emptyText">AEGIS shows gold only from a broker you are connected to.</p>
+                <button class="ok" id="emptyConnect" type="button">Connect a broker</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="dock glass">
+        <div class="stat"><span>Brokers</span><strong id="statBrokers">0 / 3</strong></div>
+        <div class="stat"><span>Chart</span><strong id="statChart">—</strong></div>
+        <div class="stat"><span>Last</span><strong id="statLast">—</strong></div>
+        <div class="log" id="log"></div>
+      </footer>
+    </div>
+
+    <div class="sheet-backdrop" id="backdrop" hidden></div>
+    <aside class="sheet glass" id="sheet" hidden>
+      <button class="row" data-open="brokers" type="button"><span>Brokers</span><span class="row-ico">▣</span></button>
+      <button class="row" data-open="theme" type="button"><span>Theme</span><span class="row-ico">▤</span></button>
+      <button class="row danger" id="sheetClose" type="button"><span>Close</span><span class="row-ico">✕</span></button>
+    </aside>
+
+    <section class="panel glass" id="panel" hidden>
+      <header class="panel-h">
+        <h2 id="panelTitle">Settings</h2>
+        <button class="orb sm" id="panelClose" type="button" aria-label="Close">✕</button>
+      </header>
+      <div id="panelBody"></div>
     </section>
 
-    <aside class="card side">
-      <h3>Strategies</h3>
-      <div id="strategies" class="strategies"></div>
-      <p class="muted small">Slots only. Strategy logic lands in later versions.</p>
-    </aside>
-  </main>
-
-  <div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="sheet">
-      <header>
-        <h2 id="modalTitle">Connect broker</h2>
-        <button class="icon" id="modalClose" type="button" aria-label="Close">×</button>
-      </header>
-      <nav class="segmented wide" id="brokerTabs"></nav>
-      <div class="venue" id="venue"></div>
-      <form id="form" autocomplete="off">
-        <div id="fields" class="fields"></div>
-        <div class="error hidden" id="formError"></div>
-        <footer>
-          <button class="ghost hidden" id="disconnect" type="button">Disconnect</button>
-          <div class="spacer"></div>
-          <button class="primary" id="connect" type="button">Connect</button>
-        </footer>
-      </form>
-    </div>
-  </div>
-
-  <script src="vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="app.js"></script>
-</body>
+    <script src="vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>

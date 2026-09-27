@@ -7,6 +7,8 @@ The server clock runs 3 hours ahead of UTC, like RoboForex in summer.
 import time
 from types import SimpleNamespace
 
+__version__ = "5.0.5120"
+
 TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 1, 5, 15, 16385, 16388, 16408
 SERVER_OFFSET = 3 * 3600
 
@@ -30,7 +32,12 @@ def last_error():
 
 
 def account_info():
-    return SimpleNamespace(login=1, server="RoboForex-ECN", currency="USD", balance=1000.0)
+    return SimpleNamespace(login=1, server="RoboForex-ECN", currency="USD", balance=1000.0, trade_allowed=True,
+                           trade_expert=True)
+
+
+def terminal_info():
+    return SimpleNamespace(connected=True, trade_allowed=False, company="RoboForex Ltd", build=5120)
 
 
 def symbols_get(group=None):
@@ -38,7 +45,7 @@ def symbols_get(group=None):
 
 
 def symbol_info(name):
-    return SimpleNamespace(name=name) if name == "XAUUSD.r" else None
+    return SimpleNamespace(name=name, spread=30) if name == "XAUUSD.r" else None
 
 
 def symbol_select(name, enable):

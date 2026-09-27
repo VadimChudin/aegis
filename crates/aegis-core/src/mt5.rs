@@ -13,7 +13,8 @@ use tokio::{
 };
 
 use crate::{
-    broker::{require, BrokerError},
+    broker::{require, BrokerError, Probe},
+    checks::{Check, Checklist},
     market::{Candle, Timeframe},
 };
 
@@ -41,46 +42,130 @@ fn default_python() -> &'static str {
     }
 }
 
+const AFTER_PYTHON: [(&str, &str); 3] = [
+    ("package", "MetaTrader5 package"),
+    ("login", "MT5 login"),
+    ("terminal", "Terminal"),
+];
+
 impl Mt5Bridge {
-    pub(crate) async fn connect(
+    /// Starts the bridge, logs in and returns the terminal's own checklist.
+    pub(crate) async fn probe(
         python: Option<&str>,
         script: &Path,
         login: &str,
         password: &str,
         server: &str,
         terminal_path: Option<&str>,
-    ) -> Result<(Self, String), BrokerError> {
-        let login: u64 = require(login, "MT5 login")?
-            .parse()
-            .map_err(|_| BrokerError::Input("MT5 login must be a number".into()))?;
-        let password = require(password, "Password")?;
-        let server = require(server, "Server")?;
+    ) -> Probe<Self> {
+        let mut list = Checklist::default();
+        if login.trim().parse::<u64>().is_err() {
+            list.fail("input", "Credentials", "MT5 login must be a number");
+            return Probe {
+                conn: None,
+                checks: list,
+                account: None,
+            };
+        }
         let python = python
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .unwrap_or(default_python());
-
-        let io = spawn(python, script)?;
-        let mut bridge = Mt5Bridge {
-            io: Mutex::new(io),
-            symbol: String::new(),
+        let bridge = match spawn(python, script) {
+            Ok(io) => Mt5Bridge {
+                io: Mutex::new(io),
+                symbol: String::new(),
+            },
+            Err(e) => {
+                list.fail("python", "Python", e.to_string());
+                list.skip(&AFTER_PYTHON);
+                return Probe {
+                    conn: None,
+                    checks: list,
+                    account: None,
+                };
+            }
         };
-
-        let hello = bridge.request(json!({"cmd": "hello"}), REQUEST_TIMEOUT).await?;
-        if hello["protocol"].as_i64() != Some(PROTOCOL) {
-            return Err(BrokerError::Bridge(format!("unsupported bridge protocol: {hello}")));
+        let hello = match bridge.request(json!({"cmd": "hello"}), REQUEST_TIMEOUT).await {
+            Ok(h) if h["protocol"].as_i64() == Some(PROTOCOL) => h,
+            Ok(h) => {
+                list.fail("python", "Python", format!("unsupported bridge protocol: {h}"));
+                list.skip(&AFTER_PYTHON);
+                return bridge.fail(list).await;
+            }
+            Err(e) => {
+                list.fail("python", "Python", e.to_string());
+                list.skip(&AFTER_PYTHON);
+                return bridge.fail(list).await;
+            }
+        };
+        list.ok(
+            "python",
+            "Python",
+            hello["python"].as_str().unwrap_or("found").to_string(),
+        );
+        match hello["mt5_package"].as_str() {
+            Some(version) => list.ok("package", "MetaTrader5 package", version.to_string()),
+            None => {
+                let why = hello["mt5_error"]
+                    .as_str()
+                    .unwrap_or("not installed: run `pip install MetaTrader5`");
+                list.fail("package", "MetaTrader5 package", why.to_string());
+                list.skip(&AFTER_PYTHON[1..]);
+                return bridge.fail(list).await;
+            }
         }
-        let mut req = json!({"cmd": "connect", "login": login, "password": password, "server": server});
+        let mut bridge = bridge;
+        match bridge.login(login, password, server, terminal_path).await {
+            Ok(result) => {
+                list.ok("login", "MT5 login", format!("{login} · {server}"));
+                if let Ok(checks) = serde_json::from_value::<Vec<Check>>(result["checks"].clone()) {
+                    list.extend(checks);
+                }
+                let account = result["account"].as_str().unwrap_or("MT5 account").to_string();
+                Probe {
+                    conn: Some(bridge),
+                    checks: list,
+                    account: Some(account),
+                }
+            }
+            Err(e) => {
+                list.fail("login", "MT5 login", e.to_string());
+                list.skip(&AFTER_PYTHON[2..]);
+                bridge.fail(list).await
+            }
+        }
+    }
+
+    async fn fail(self, checks: Checklist) -> Probe<Self> {
+        self.shutdown().await;
+        Probe {
+            conn: None,
+            checks,
+            account: None,
+        }
+    }
+
+    async fn login(
+        &mut self,
+        login: &str,
+        password: &str,
+        server: &str,
+        terminal_path: Option<&str>,
+    ) -> Result<Value, BrokerError> {
+        let login: u64 = require(login, "MT5 login")?
+            .parse()
+            .map_err(|_| BrokerError::Input("MT5 login must be a number".into()))?;
+        let mut req = json!({"cmd": "connect", "login": login, "password": password.trim(), "server": server.trim()});
         if let Some(path) = terminal_path.map(str::trim).filter(|p| !p.is_empty()) {
             req["terminal_path"] = json!(path);
         }
-        let result = bridge.request(req, CONNECT_TIMEOUT).await?;
-        bridge.symbol = result["symbol"]
+        let result = self.request(req, CONNECT_TIMEOUT).await?;
+        let symbol = result["symbol"]
             .as_str()
-            .ok_or_else(|| BrokerError::Bridge(format!("connect reply without symbol: {result}")))?
-            .to_string();
-        let account = result["account"].as_str().unwrap_or("MT5 account").to_string();
-        Ok((bridge, account))
+            .ok_or_else(|| BrokerError::Bridge(format!("connect reply without symbol: {result}")))?;
+        self.symbol = symbol.to_string();
+        Ok(result)
     }
 
     pub(crate) fn symbol(&self) -> &str {

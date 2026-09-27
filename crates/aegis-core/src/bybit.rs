@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::{
     binance::http_client,
-    broker::{network, read_json, require, BrokerError},
+    broker::{network, read_json, require, BrokerError, Probe},
+    checks::{clock, Checklist},
     market::{int, num, Candle, Timeframe},
     sign::{hmac_sha256_hex, now_ms},
 };
@@ -14,6 +15,16 @@ const VENUE: &str = "Bybit";
 const DEFAULT_URL: &str = "https://api.bybit.com";
 const RECV_WINDOW: &str = "5000";
 const MAX_LIMIT: usize = 1000;
+
+const AFTER_REACH: [(&str, &str); 7] = [
+    ("clock", "Clock in sync"),
+    ("symbol", "XAUUSDT listed"),
+    ("key", "API key accepted"),
+    ("uta", "Unified Trading Account"),
+    ("perms", "Key permissions"),
+    ("ip", "IP binding"),
+    ("balance", "Equity"),
+];
 
 pub struct Bybit {
     http: reqwest::Client,
@@ -51,12 +62,111 @@ impl Bybit {
         })
     }
 
-    pub(crate) async fn verify(&self) -> Result<String, BrokerError> {
-        let query = "accountType=UNIFIED";
-        let ts = now_ms();
+    pub(crate) async fn probe(self) -> Probe<Self> {
+        let mut list = Checklist::default();
+        let started = now_ms();
+        match self.public("/v5/market/time").await {
+            Err(e) => {
+                list.fail("reach", "Bybit reachable", e.to_string());
+                list.skip(&AFTER_REACH);
+                return Probe {
+                    conn: None,
+                    checks: list,
+                    account: None,
+                };
+            }
+            Ok(body) => {
+                list.ok(
+                    "reach",
+                    "Bybit reachable",
+                    self.base.split("://").nth(1).unwrap_or(&self.base).to_string(),
+                );
+                let local = (started + now_ms()) / 2;
+                let server = int(&body["result"]["timeNano"])
+                    .map(|n| n / 1_000_000)
+                    .or_else(|| int(&body["time"]));
+                clock(&mut list, server.unwrap_or(local) - local);
+            }
+        }
+
+        match self
+            .public(&format!("/v5/market/instruments-info?category=linear&symbol={SYMBOL}"))
+            .await
+        {
+            Ok(body) => match body["result"]["list"][0]["status"].as_str() {
+                Some("Trading") => list.ok("symbol", "XAUUSDT listed", "trading · linear perpetual"),
+                Some(other) => list.fail("symbol", "XAUUSDT listed", format!("status {other}")),
+                None => list.fail("symbol", "XAUUSDT listed", "not offered on this Bybit endpoint"),
+            },
+            Err(e) => list.warn("symbol", "XAUUSDT listed", format!("could not read instruments: {e}")),
+        }
+
+        let info = match self.signed("/v5/user/query-api", "").await {
+            Ok(body) => {
+                list.ok("key", "API key accepted", "signed request works");
+                body["result"].clone()
+            }
+            Err(e) => {
+                list.fail("key", "API key accepted", e.to_string());
+                list.skip(&AFTER_REACH[3..]);
+                return Probe {
+                    conn: None,
+                    checks: list,
+                    account: None,
+                };
+            }
+        };
+        key_checks(&mut list, &info);
+
+        let equity = match self.signed("/v5/account/wallet-balance", "accountType=UNIFIED").await {
+            Ok(body) => num(&body["result"]["list"][0]["totalEquity"]),
+            Err(e) => {
+                list.warn("balance", "Equity", format!("could not read the wallet: {e}"));
+                return Probe {
+                    conn: Some(self),
+                    checks: list,
+                    account: Some("Unified account".into()),
+                };
+            }
+        };
+        let equity = equity.unwrap_or(0.0);
+        if equity > 0.0 {
+            list.ok("balance", "Equity", format!("{equity:.2} USD"));
+        } else {
+            list.warn("balance", "Equity", "Empty wallet (fine for charts, needed to trade)");
+        }
+        Probe {
+            conn: Some(self),
+            checks: list,
+            account: Some(format!("Equity {equity:.2} USD")),
+        }
+    }
+
+    pub(crate) async fn candles(&self, tf: Timeframe, limit: usize) -> Result<Vec<Candle>, BrokerError> {
+        let path = format!(
+            "/v5/market/kline?category=linear&symbol={SYMBOL}&interval={}&limit={}",
+            interval(tf),
+            limit.clamp(1, MAX_LIMIT)
+        );
+        parse_klines(&self.public(&path).await?)
+    }
+
+    async fn public(&self, path: &str) -> Result<Value, BrokerError> {
         let resp = self
             .http
-            .get(format!("{}/v5/account/wallet-balance?{query}", self.base))
+            .get(format!("{}{path}", self.base))
+            .send()
+            .await
+            .map_err(network)?;
+        checked(read_json(VENUE, resp).await?)
+    }
+
+    async fn signed(&self, path: &str, query: &str) -> Result<Value, BrokerError> {
+        let ts = now_ms();
+        let sep = if query.is_empty() { "" } else { "?" };
+        let resp = self
+            .http
+            .get(format!("{}{path}{sep}{query}", self.base))
             .header("X-BAPI-API-KEY", &self.key)
             .header("X-BAPI-TIMESTAMP", ts.to_string())
             .header("X-BAPI-RECV-WINDOW", RECV_WINDOW)
@@ -64,23 +174,67 @@ impl Bybit {
             .send()
             .await
             .map_err(network)?;
-        let body = checked(read_json(VENUE, resp).await?)?;
-        let equity = num(&body["result"]["list"][0]["totalEquity"]);
-        Ok(match equity {
-            Some(e) => format!("Equity {e:.2} USD"),
-            None => "unified account".into(),
-        })
+        checked(read_json(VENUE, resp).await?)
+    }
+}
+
+/// Account type, permissions and IP binding from `/v5/user/query-api`.
+fn key_checks(list: &mut Checklist, info: &Value) {
+    if info["uta"].as_i64() == Some(1) {
+        list.ok("uta", "Unified Trading Account", "yes");
+    } else {
+        list.fail(
+            "uta",
+            "Unified Trading Account",
+            "classic account: upgrade to UTA in Bybit (Assets → Unified Trading)",
+        );
     }
 
-    pub(crate) async fn candles(&self, tf: Timeframe, limit: usize) -> Result<Vec<Candle>, BrokerError> {
-        let url = format!(
-            "{}/v5/market/kline?category=linear&symbol={SYMBOL}&interval={}&limit={}",
-            self.base,
-            interval(tf),
-            limit.clamp(1, MAX_LIMIT)
+    let has = |group: &str, perm: &str| {
+        info["permissions"][group]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|p| p == perm))
+    };
+    let mut notes = Vec::new();
+    let mut trade = false;
+    if info["readOnly"].as_i64() == Some(1) {
+        notes.push("read-only: fine now, trading will need Contract → Orders + Positions".to_string());
+    } else if (has("ContractTrade", "Order") && has("ContractTrade", "Position"))
+        || has("Derivatives", "DerivativesTrade")
+    {
+        trade = true;
+    } else {
+        notes.push("no contract trading permission".to_string());
+    }
+    if has("Wallet", "Withdraw") {
+        notes.push("Withdraw is enabled: turn it off for this key".to_string());
+    }
+    if notes.is_empty() {
+        list.ok(
+            "perms",
+            "Key permissions",
+            if trade {
+                "Contract Orders + Positions, no withdrawals"
+            } else {
+                "ok"
+            },
         );
-        let resp = self.http.get(url).send().await.map_err(network)?;
-        parse_klines(&checked(read_json(VENUE, resp).await?)?)
+    } else {
+        list.warn("perms", "Key permissions", notes.join("; "));
+    }
+
+    let ips: Vec<&str> = info["ips"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if ips.is_empty() || ips.contains(&"*") {
+        let days = info["deadlineDay"]
+            .as_i64()
+            .map(|d| format!(" (expires in {d} days)"))
+            .unwrap_or_default();
+        list.warn("ip", "IP binding", format!("not bound to an IP{days}"));
+    } else {
+        list.ok("ip", "IP binding", format!("bound to {} IP", ips.len()));
     }
 }
 
@@ -135,6 +289,7 @@ pub(crate) fn parse_klines(body: &Value) -> Result<Vec<Candle>, BrokerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checks::CheckStatus;
 
     #[test]
     fn parses_klines_oldest_first() {
@@ -173,5 +328,28 @@ mod tests {
         for tf in Timeframe::ALL {
             assert!(!interval(tf).is_empty());
         }
+    }
+
+    fn statuses(info: &str) -> Vec<(String, CheckStatus)> {
+        let mut l = Checklist::default();
+        key_checks(&mut l, &serde_json::from_str(info).unwrap());
+        l.into_vec().into_iter().map(|c| (c.id, c.status)).collect()
+    }
+
+    #[test]
+    fn key_rules() {
+        let good = statuses(
+            r#"{"uta":1,"readOnly":0,"ips":["1.2.3.4"],"permissions":{"ContractTrade":["Order","Position"],"Wallet":[]}}"#,
+        );
+        assert!(good.iter().all(|(_, s)| *s == CheckStatus::Ok), "{good:?}");
+        let loose = statuses(r#"{"uta":0,"readOnly":1,"ips":["*"],"permissions":{"Wallet":["Withdraw"]}}"#);
+        assert_eq!(
+            loose,
+            vec![
+                ("uta".into(), CheckStatus::Fail),
+                ("perms".into(), CheckStatus::Warn),
+                ("ip".into(), CheckStatus::Warn)
+            ]
+        );
     }
 }

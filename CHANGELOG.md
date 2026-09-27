@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-09-27
+
+- **Several brokers at once.** Binance, Bybit and RoboForex stay connected together. The header picks which one the chart shows; the chart never mixes venues. Header icons show each broker's state and open its settings.
+- **Brokers panel** replaces the login dialog: each broker has its icon, its requirements (key type, permissions, IP restriction, UTA, MT5 terminal and Python package), its form and a connect checklist with a reason for every warning or failure. A failed step skips the steps that depend on it.
+- **Saved credentials:** every field is stored encrypted (AES-256-GCM, key bound to this computer and user) in `settings.json`, with owner-only permissions. Secrets are never sent back to the window; an empty secret field keeps the stored one. *Connect on start* reconnects saved brokers; *Forget* removes them.
+- The chart broker, timeframe and theme are remembered.
+- **Vespera design:** the same glass styles and themes (Glass dark, light, blue), rail, dock with a log, and pickers.
+- Still no order placement; the four strategy slots remain stubs.
+
 ## 0.1.0 — 2026-09-26
 
 First skeleton.

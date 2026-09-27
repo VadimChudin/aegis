@@ -26,12 +26,15 @@ class BridgeTest(unittest.TestCase):
             {"id": 2, "cmd": "connect", "login": 1, "password": "good", "server": "RoboForex-ECN"},
             {"id": 3, "cmd": "candles", "timeframe": "15m", "limit": 3},
         )
-        self.assertEqual(hello, {"id": 1, "ok": True, "result": {"protocol": 1}})
+        self.assertEqual(hello["result"]["protocol"], 1)
+        self.assertEqual(hello["result"]["mt5_package"], "5.0.5120")
         self.assertTrue(conn["ok"], conn)
         self.assertEqual(conn["result"]["symbol"], "XAUUSD.r")
         self.assertEqual(conn["result"]["server_offset"], 3 * 3600)
         self.assertEqual([b["time"] for b in bars["result"]], [1_790_208_000, 1_790_208_900, 1_790_209_800])
         self.assertEqual(bars["result"][0]["volume"], 100.0)
+        checks = {c["id"]: c["status"] for c in conn["result"]["checks"]}
+        self.assertEqual(checks, {"terminal": "ok", "algo": "warn", "trading": "ok", "symbol": "ok", "balance": "ok"})
 
     def test_failed_login_is_a_reply_not_a_crash(self):
         (conn, bars) = run(
@@ -46,6 +49,19 @@ class BridgeTest(unittest.TestCase):
         out = io.StringIO()
         serve(Bridge(fake), io.StringIO('garbage\n{"id": 7, "cmd": "nope"}\n'), out)
         self.assertEqual(json.loads(out.getvalue()), {"id": 7, "ok": False, "error": "unknown command: nope"})
+
+    def test_hello_reports_a_missing_package(self):
+        bridge = Bridge()
+        saved = sys.modules.pop("MetaTrader5", None)
+        sys.path.remove(os.path.join(os.path.dirname(__file__), "fake_mt5"))
+        try:
+            (reply,) = [json.loads(x) for x in self._serve(bridge, {"id": 1, "cmd": "hello"})]
+            self.assertNotIn("mt5_package", reply["result"])
+            self.assertIn("pip install MetaTrader5", reply["result"]["mt5_error"])
+        finally:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fake_mt5"))
+            if saved is not None:
+                sys.modules["MetaTrader5"] = saved
 
     def test_missing_package_is_explained(self):
         bridge = Bridge()

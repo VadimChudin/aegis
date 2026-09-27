@@ -2,7 +2,7 @@
 where the real APIs are unreachable (geo-blocks, CI). Prices are a random walk.
 
     python scripts/mock_venues.py            # listens on 127.0.0.1:8765
-    AEGIS_BINANCE_URL=http://127.0.0.1:8765/binance \
+    AEGIS_BINANCE_URL=http://127.0.0.1:8765/binance AEGIS_BINANCE_SPOT_URL=http://127.0.0.1:8765/binance \
     AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit cargo run -p aegis-app
 
 Log in with API key `test-key` and secret `test-secret`; the mock checks the
@@ -62,30 +62,72 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def binance_signed(self, url, q):
+        unsigned = url.query.rsplit("&signature=", 1)[0]
+        if self.headers.get("X-MBX-APIKEY") != KEY or q.get("signature") != sign(unsigned):
+            self.reply(401, {"code": -2015, "msg": "Invalid API-key, IP, or permissions for action."})
+            return False
+        return True
+
+    def bybit_signed(self, url):
+        h = self.headers
+        expected = sign(f"{h.get('X-BAPI-TIMESTAMP')}{KEY}{h.get('X-BAPI-RECV-WINDOW')}{url.query}")
+        if h.get("X-BAPI-API-KEY") != KEY or h.get("X-BAPI-SIGN") != expected:
+            self.reply(200, {"retCode": 10003, "retMsg": "API key is invalid."})
+            return False
+        return True
+
     def do_GET(self):
         url = urlsplit(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
-        if url.path == "/binance/fapi/v1/klines":
+        now_ms = int(time.time() * 1000)
+        path = url.path
+        if path == "/binance/fapi/v1/time":
+            return self.reply(200, {"serverTime": now_ms})
+        if path == "/binance/fapi/v1/exchangeInfo":
+            return self.reply(200, {"symbols": [
+                {"symbol": "BTCUSDT", "status": "TRADING", "contractType": "PERPETUAL"},
+                {"symbol": "XAUUSDT", "status": "TRADING", "contractType": "TRADIFI_PERPETUAL"}]})
+        if path == "/binance/fapi/v1/klines":
             rows = bars(q["interval"], int(q.get("limit", 500)))
             return self.reply(200, [[t * 1000, f"{o:.2f}", f"{h:.2f}", f"{lo:.2f}", f"{c:.2f}", f"{v:.3f}",
                                      t * 1000 + 59999, "0", 0, "0", "0", "0"] for t, o, h, lo, c, v in rows])
-        if url.path == "/binance/fapi/v2/balance":
-            unsigned = url.query.rsplit("&signature=", 1)[0]
-            if self.headers.get("X-MBX-APIKEY") != KEY or q.get("signature") != sign(unsigned):
-                return self.reply(401, {"code": -2015, "msg": "Invalid API-key, IP, or permissions for action."})
-            return self.reply(200, [{"asset": "USDT", "balance": "1250.40", "availableBalance": "1250.40"}])
-        if url.path == "/bybit/v5/market/kline":
+        if path == "/binance/fapi/v2/balance":
+            if self.binance_signed(url, q):
+                self.reply(200, [{"asset": "USDT", "balance": "1250.40", "availableBalance": "1250.40"}])
+            return None
+        if path == "/binance/fapi/v1/positionSide/dual":
+            if self.binance_signed(url, q):
+                self.reply(200, {"dualSidePosition": False})
+            return None
+        if path == "/binance/sapi/v1/account/apiRestrictions":
+            if self.binance_signed(url, q):
+                self.reply(200, {"ipRestrict": False, "createTime": now_ms, "enableReading": True,
+                                 "enableWithdrawals": False, "enableFutures": False,
+                                 "enableSpotAndMarginTrading": False})
+            return None
+        if path == "/bybit/v5/market/time":
+            return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {
+                "timeSecond": str(now_ms // 1000), "timeNano": str(now_ms * 1_000_000)}, "time": now_ms})
+        if path == "/bybit/v5/market/instruments-info":
+            return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {
+                "category": "linear", "list": [{"symbol": q.get("symbol"), "status": "Trading"}]}})
+        if path == "/bybit/v5/market/kline":
             rows = bars(BYBIT_TF[q["interval"]], int(q.get("limit", 200)))
             lst = [[str(t * 1000), f"{o:.2f}", f"{h:.2f}", f"{lo:.2f}", f"{c:.2f}", f"{v:.3f}", "0"]
                    for t, o, h, lo, c, v in reversed(rows)]
             return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {"list": lst}})
-        if url.path == "/bybit/v5/account/wallet-balance":
-            h = self.headers
-            expected = sign(f"{h.get('X-BAPI-TIMESTAMP')}{KEY}{h.get('X-BAPI-RECV-WINDOW')}{url.query}")
-            if h.get("X-BAPI-API-KEY") != KEY or h.get("X-BAPI-SIGN") != expected:
-                return self.reply(200, {"retCode": 10003, "retMsg": "API key is invalid."})
-            return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {"list": [{"totalEquity": "980.15"}]}})
-        self.reply(404, {"code": -1, "msg": "not found"})
+        if path == "/bybit/v5/user/query-api":
+            if self.bybit_signed(url):
+                self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {
+                    "readOnly": 1, "uta": 1, "ips": ["*"], "deadlineDay": 83,
+                    "permissions": {"ContractTrade": [], "Wallet": [], "Spot": []}}})
+            return None
+        if path == "/bybit/v5/account/wallet-balance":
+            if self.bybit_signed(url):
+                self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {"list": [{"totalEquity": "980.15"}]}})
+            return None
+        return self.reply(404, {"code": -1, "msg": "not found"})
 
 
 if __name__ == "__main__":

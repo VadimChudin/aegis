@@ -49,7 +49,13 @@ class Bridge:
         return self._mt5
 
     def hello(self, _req):
-        return {"protocol": PROTOCOL}
+        reply = {"protocol": PROTOCOL, "python": sys.version.split()[0]}
+        try:
+            mt5 = self.mt5()
+            reply["mt5_package"] = str(getattr(mt5, "__version__", "installed"))
+        except BridgeError as e:
+            reply["mt5_error"] = str(e)
+        return reply
 
     def connect(self, req):
         mt5 = self.mt5()
@@ -71,7 +77,46 @@ class Bridge:
         account = (
             f"{info.login} · {info.server} · {info.currency} {info.balance:.2f}" if info else f"{kwargs['login']}"
         )
-        return {"symbol": self.symbol, "account": account, "server_offset": self.offset}
+        return {
+            "symbol": self.symbol,
+            "account": account,
+            "server_offset": self.offset,
+            "checks": self._checks(mt5, info),
+        }
+
+    def _checks(self, mt5, info):
+        """Terminal and account state the app shows in the connect checklist."""
+        checks = []
+
+        def add(cid, label, status, detail=""):
+            checks.append({"id": cid, "label": label, "status": status, "detail": detail})
+
+        term = mt5.terminal_info()
+        if term is None:
+            add("terminal", "Terminal", "warn", "terminal_info() returned nothing")
+        elif not term.connected:
+            add("terminal", "Terminal", "fail", "the terminal is not connected to the trade server")
+        else:
+            add("terminal", "Terminal", "ok", f"{term.company} · build {term.build}")
+        if term is not None:
+            if term.trade_allowed:
+                add("algo", "Algo Trading button", "ok", "enabled")
+            else:
+                add("algo", "Algo Trading button", "warn", "off: press Algo Trading on the toolbar before trading")
+        if info is not None:
+            if not info.trade_allowed:
+                add("trading", "Trading on this account", "warn", "not allowed (investor password or disabled account)")
+            elif not info.trade_expert:
+                add("trading", "Trading on this account", "warn", "Expert Advisors are not allowed on this account")
+            else:
+                add("trading", "Trading on this account", "ok", "allowed, including automated trading")
+        sym = mt5.symbol_info(self.symbol)
+        spread = f" · spread {sym.spread} points" if sym is not None and getattr(sym, "spread", None) else ""
+        add("symbol", "Gold symbol", "ok", f"{self.symbol}{spread}")
+        if info is not None:
+            status = "ok" if info.balance > 0 else "warn"
+            add("balance", "Balance", status, f"{info.currency} {info.balance:.2f}")
+        return checks
 
     def _find_symbol(self, mt5):
         # Account types name gold differently (XAUUSD, XAUUSD.r, ...): prefer the plain name.

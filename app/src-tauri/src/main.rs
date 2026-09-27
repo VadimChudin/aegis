@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    collections::{BTreeMap, HashMap},
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -11,7 +12,8 @@ use std::{
 
 use aegis_core::{
     strategy::{self, StrategyInfo},
-    AccountSummary, BrokerId, BrokerInfo, Candle, ConnectOptions, Connector, Credentials, Timeframe,
+    AccountSummary, BrokerId, BrokerInfo, Candle, ConnectOptions, ConnectReport, Connector, Credentials,
+    PublicSettings, SettingsStore, Timeframe,
 };
 use serde::Serialize;
 use tauri::{
@@ -30,28 +32,97 @@ struct Session {
     summary: AccountSummary,
 }
 
-#[derive(Default)]
 struct AppState {
-    session: Mutex<Option<Session>>,
-    feed: std::sync::Mutex<Option<JoinHandle<()>>>,
+    settings: Mutex<SettingsStore>,
+    /// Every connected broker. Binance, Bybit and RoboForex can be open together.
+    sessions: Mutex<HashMap<BrokerId, Session>>,
+    /// Serialises connect/disconnect per app so two clicks cannot race.
+    connecting: Mutex<()>,
+    feed: std::sync::Mutex<Option<(BrokerId, JoinHandle<()>)>>,
     /// Bumped on every chart load; the window drops events from older feeds.
     generation: AtomicU64,
+    options: ConnectOptions,
 }
 
 impl AppState {
-    fn stop_feed(&self) {
-        if let Some(feed) = self.feed.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            feed.abort();
+    fn stop_feed(&self, only: Option<BrokerId>) {
+        let mut feed = self.feed.lock().unwrap_or_else(|e| e.into_inner());
+        if feed.as_ref().is_some_and(|(b, _)| only.is_none_or(|o| o == *b)) {
+            if let Some((_, handle)) = feed.take() {
+                handle.abort();
+            }
+            self.generation.fetch_add(1, Ordering::SeqCst);
         }
     }
 
-    async fn close_session(&self) {
-        self.stop_feed();
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(old) = self.session.lock().await.take() {
+    async fn close(&self, broker: BrokerId) {
+        self.stop_feed(Some(broker));
+        if let Some(old) = self.sessions.lock().await.remove(&broker) {
             old.connector.close().await;
         }
     }
+
+    async fn close_all(&self) {
+        self.stop_feed(None);
+        let sessions: Vec<_> = self.sessions.lock().await.drain().collect();
+        for (_, s) in sessions {
+            s.connector.close().await;
+        }
+    }
+
+    async fn summaries(&self) -> Vec<AccountSummary> {
+        let mut list: Vec<_> = self.sessions.lock().await.values().map(|s| s.summary.clone()).collect();
+        list.sort_by_key(|s| s.broker);
+        list
+    }
+
+    async fn save(&self, settings: &SettingsStore) {
+        if let Err(e) = settings.save() {
+            eprintln!("AEGIS: cannot save {}: {e}", settings.path().display());
+        }
+    }
+
+    /// Opens a session from credentials, replacing this broker's previous one.
+    async fn open(&self, broker: BrokerId, fields: BTreeMap<String, String>) -> ConnectReport {
+        let _guard = self.connecting.lock().await;
+        self.close(broker).await;
+        let report = match Credentials::from_fields(broker, &fields) {
+            Err(e) => ConnectReport::input_error(broker, &e),
+            Ok(credentials) => {
+                let (connector, report) = Connector::connect(credentials, &self.options).await;
+                if let Some(connector) = connector {
+                    let summary = AccountSummary {
+                        broker,
+                        name: broker.name(),
+                        symbol: connector.symbol().to_string(),
+                        account: report.account.clone().unwrap_or_default(),
+                    };
+                    self.sessions.lock().await.insert(
+                        broker,
+                        Session {
+                            connector: Arc::new(connector),
+                            summary,
+                        },
+                    );
+                }
+                report
+            }
+        };
+        let mut settings = self.settings.lock().await;
+        settings.set_report(broker, report.clone());
+        self.save(&settings).await;
+        report
+    }
+}
+
+#[derive(Serialize)]
+struct Bootstrap {
+    version: &'static str,
+    brokers: Vec<BrokerInfo>,
+    timeframes: Vec<Timeframe>,
+    strategies: Vec<StrategyInfo>,
+    settings: PublicSettings,
+    sessions: Vec<AccountSummary>,
 }
 
 #[derive(Clone, Serialize)]
@@ -77,62 +148,113 @@ struct FeedStatus {
 }
 
 #[tauri::command]
-fn brokers() -> Vec<BrokerInfo> {
-    BrokerId::ALL.into_iter().map(BrokerId::info).collect()
+async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
+    Ok(Bootstrap {
+        version: env!("CARGO_PKG_VERSION"),
+        brokers: BrokerId::ALL.into_iter().map(BrokerId::info).collect(),
+        timeframes: Timeframe::ALL.to_vec(),
+        strategies: strategy::catalog(),
+        settings: state.settings.lock().await.public(),
+        sessions: state.summaries().await,
+    })
 }
 
 #[tauri::command]
-fn timeframes() -> Vec<Timeframe> {
-    Timeframe::ALL.to_vec()
+async fn settings_get(state: State<'_, AppState>) -> Result<PublicSettings, String> {
+    Ok(state.settings.lock().await.public())
 }
 
 #[tauri::command]
-fn strategies() -> Vec<StrategyInfo> {
-    strategy::catalog()
+async fn sessions(state: State<'_, AppState>) -> Result<Vec<AccountSummary>, String> {
+    Ok(state.summaries().await)
 }
 
+/// Saves the form (secrets encrypted, empty secret keeps the stored one) and connects.
 #[tauri::command]
-async fn session(state: State<'_, AppState>) -> Result<Option<AccountSummary>, String> {
-    Ok(state.session.lock().await.as_ref().map(|s| s.summary.clone()))
-}
-
-/// Logs in to one broker. Any previous broker is logged out first, so the chart
-/// can only ever show data from the broker that is connected now.
-#[tauri::command]
-async fn connect(
-    app: AppHandle,
+async fn broker_connect(
     state: State<'_, AppState>,
-    credentials: Credentials,
-) -> Result<AccountSummary, String> {
-    state.close_session().await;
-    let (connector, summary) = Connector::connect(credentials, &connect_options(&app))
-        .await
-        .map_err(|e| e.to_string())?;
-    *state.session.lock().await = Some(Session {
-        connector: Arc::new(connector),
-        summary: summary.clone(),
-    });
-    Ok(summary)
+    broker: BrokerId,
+    form: BTreeMap<String, String>,
+    auto_connect: bool,
+) -> Result<ConnectReport, String> {
+    let fields = {
+        let mut settings = state.settings.lock().await;
+        let fields = settings.apply_form(broker, &form);
+        settings.set_auto_connect(broker, auto_connect);
+        state.save(&settings).await;
+        fields
+    };
+    Ok(state.open(broker, fields).await)
+}
+
+/// Connects with the stored credentials (auto-connect on start). `None` if nothing is stored.
+#[tauri::command]
+async fn broker_connect_saved(state: State<'_, AppState>, broker: BrokerId) -> Result<Option<ConnectReport>, String> {
+    let fields = {
+        let settings = state.settings.lock().await;
+        if !settings.has_credentials(broker) {
+            return Ok(None);
+        }
+        settings.credentials(broker)
+    };
+    Ok(Some(state.open(broker, fields).await))
 }
 
 #[tauri::command]
-async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    state.close_session().await;
+async fn broker_disconnect(
+    state: State<'_, AppState>,
+    broker: BrokerId,
+    forget: bool,
+) -> Result<PublicSettings, String> {
+    let _guard = state.connecting.lock().await;
+    state.close(broker).await;
+    let mut settings = state.settings.lock().await;
+    if forget {
+        settings.forget(broker);
+        state.save(&settings).await;
+    }
+    Ok(settings.public())
+}
+
+#[tauri::command]
+async fn set_auto_connect(state: State<'_, AppState>, broker: BrokerId, on: bool) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    settings.set_auto_connect(broker, on);
+    state.save(&settings).await;
     Ok(())
 }
 
-/// Loads history for the active broker and starts its live feed.
 #[tauri::command]
-async fn load_chart(app: AppHandle, state: State<'_, AppState>, timeframe: Timeframe) -> Result<ChartData, String> {
+async fn set_theme(state: State<'_, AppState>, theme: String) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    settings.set_theme(&theme);
+    state.save(&settings).await;
+    Ok(())
+}
+
+/// Loads history from one connected broker and starts its live feed.
+/// The chart never mixes brokers: the previous feed is stopped first.
+#[tauri::command]
+async fn load_chart(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    broker: BrokerId,
+    timeframe: Timeframe,
+) -> Result<ChartData, String> {
     let connector = state
-        .session
+        .sessions
         .lock()
         .await
-        .as_ref()
+        .get(&broker)
         .map(|s| s.connector.clone())
-        .ok_or("Connect a broker first")?;
-    state.stop_feed();
+        .ok_or_else(|| format!("{} is not connected", broker.name()))?;
+    state.stop_feed(None);
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    {
+        let mut settings = state.settings.lock().await;
+        settings.set_chart(Some(broker), timeframe);
+        state.save(&settings).await;
+    }
     let candles = connector
         .candles(timeframe, HISTORY_BARS)
         .await
@@ -141,16 +263,27 @@ async fn load_chart(app: AppHandle, state: State<'_, AppState>, timeframe: Timef
         return Err("superseded".into());
     }
     let feed = async_runtime::spawn(run_feed(app, connector.clone(), timeframe, generation));
-    if let Some(old) = state.feed.lock().unwrap_or_else(|e| e.into_inner()).replace(feed) {
+    if let Some((_, old)) = state
+        .feed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .replace((broker, feed))
+    {
         old.abort();
     }
     Ok(ChartData {
         generation,
-        broker: connector.id(),
+        broker,
         symbol: connector.symbol().to_string(),
         timeframe,
         candles,
     })
+}
+
+#[tauri::command]
+async fn stop_chart(state: State<'_, AppState>) -> Result<(), String> {
+    state.stop_feed(None);
+    Ok(())
 }
 
 /// Polls the last two bars so the closing bar gets its final values too.
@@ -193,34 +326,62 @@ async fn run_feed(app: AppHandle, connector: Arc<Connector>, timeframe: Timefram
     }
 }
 
-/// `AEGIS_BINANCE_URL` / `AEGIS_BYBIT_URL` point the connectors at a testnet or a
-/// local mock; `AEGIS_MT5_BRIDGE` overrides the bundled bridge script.
-fn connect_options(app: &AppHandle) -> ConnectOptions {
+/// `AEGIS_BINANCE_URL`, `AEGIS_BINANCE_SPOT_URL`, `AEGIS_BYBIT_URL` point the connectors at
+/// a testnet or a local mock; `AEGIS_MT5_BRIDGE` overrides the bundled bridge script;
+/// `AEGIS_CONFIG_DIR` moves the settings file.
+fn setup_state(app: &AppHandle) -> AppState {
     let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
     let bundled = app
         .path()
         .resolve("bridges/mt5_bridge.py", BaseDirectory::Resource)
         .ok();
-    ConnectOptions {
+    let options = ConnectOptions {
         binance_url: env("AEGIS_BINANCE_URL"),
+        binance_spot_url: env("AEGIS_BINANCE_SPOT_URL"),
         bybit_url: env("AEGIS_BYBIT_URL"),
         mt5_bridge_script: env("AEGIS_MT5_BRIDGE").map(PathBuf::from).or(bundled),
+    };
+    let dir = env("AEGIS_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| app.path().app_config_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    AppState {
+        settings: Mutex::new(SettingsStore::open(dir.join("settings.json"))),
+        sessions: Mutex::new(HashMap::new()),
+        connecting: Mutex::new(()),
+        feed: std::sync::Mutex::new(None),
+        generation: AtomicU64::new(0),
+        options,
     }
 }
 
 fn main() {
     let app = tauri::Builder::default()
-        .manage(AppState::default())
+        .setup(|app| {
+            let state = setup_state(app.handle());
+            app.manage(state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            brokers, timeframes, strategies, session, connect, disconnect, load_chart
+            bootstrap,
+            settings_get,
+            sessions,
+            broker_connect,
+            broker_connect_saved,
+            broker_disconnect,
+            set_auto_connect,
+            set_theme,
+            load_chart,
+            stop_chart
         ])
         .build(tauri::generate_context!())
         .expect("failed to start AEGIS");
 
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
-            let state = handle.state::<AppState>();
-            async_runtime::block_on(state.close_session());
+            if let Some(state) = handle.try_state::<AppState>() {
+                async_runtime::block_on(state.close_all());
+            }
         }
     });
 }

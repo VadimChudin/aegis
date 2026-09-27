@@ -17,3 +17,5 @@ hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
 log.workspace = true
+aes-gcm = "0.10"
+whoami = "1"

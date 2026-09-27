@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use aegis_core::{BrokerError, ConnectOptions, Connector, Credentials, Timeframe};
+use aegis_core::{CheckStatus, ConnectOptions, ConnectReport, Connector, Credentials, Timeframe};
 
 struct Mock(Child);
 
@@ -42,6 +42,7 @@ fn start_mock(port: u16) -> Mock {
 fn options(port: u16) -> ConnectOptions {
     ConnectOptions {
         binance_url: Some(format!("http://127.0.0.1:{port}/binance")),
+        binance_spot_url: Some(format!("http://127.0.0.1:{port}/binance")),
         bybit_url: Some(format!("http://127.0.0.1:{port}/bybit")),
         ..Default::default()
     }
@@ -51,17 +52,38 @@ fn creds(broker: &str, secret: &str) -> Credentials {
     serde_json::from_value(serde_json::json!({"broker": broker, "api_key": "test-key", "api_secret": secret})).unwrap()
 }
 
-async fn check_venue(broker: &str, port: u16) {
-    let bad = Connector::connect(creds(broker, "wrong"), &options(port))
-        .await
-        .err()
-        .expect("bad secret must fail");
-    assert!(matches!(bad, BrokerError::Auth { .. }), "{broker}: {bad}");
+fn status(report: &ConnectReport, id: &str) -> CheckStatus {
+    report
+        .checks
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap_or_else(|| panic!("no check {id}: {report:?}"))
+        .status
+}
 
-    let (conn, summary) = Connector::connect(creds(broker, "test-secret"), &options(port))
-        .await
-        .expect("connect");
-    assert_eq!(summary.symbol, "XAUUSDT");
+async fn check_venue(broker: &str, port: u16, expected: &[(&str, CheckStatus)]) {
+    let (conn, bad) = Connector::connect(creds(broker, "wrong"), &options(port)).await;
+    assert!(
+        conn.is_none() && !bad.connected,
+        "{broker}: bad secret must not connect"
+    );
+    assert_eq!(status(&bad, "reach"), CheckStatus::Ok);
+    assert_eq!(status(&bad, "key"), CheckStatus::Fail);
+    assert!(bad
+        .checks
+        .iter()
+        .skip_while(|c| c.id != "key")
+        .skip(1)
+        .all(|c| c.status == CheckStatus::Skip));
+
+    let (conn, report) = Connector::connect(creds(broker, "test-secret"), &options(port)).await;
+    let conn = conn.expect("connect");
+    assert!(report.connected && report.ready, "{broker}: {report:?}");
+    assert_eq!(report.symbol.as_deref(), Some("XAUUSDT"));
+    for (id, want) in expected {
+        assert_eq!(status(&report, id), *want, "{broker} {id}: {report:?}");
+    }
+
     for tf in Timeframe::ALL {
         let bars = conn
             .candles(tf, 300)
@@ -81,13 +103,54 @@ async fn check_venue(broker: &str, port: u16) {
 }
 
 #[tokio::test]
-async fn binance_signs_verifies_and_reads_every_timeframe() {
+async fn binance_checklist_and_every_timeframe() {
     let _mock = start_mock(18765);
-    check_venue("binance", 18765).await;
+    use CheckStatus::*;
+    check_venue(
+        "binance",
+        18765,
+        &[
+            ("reach", Ok),
+            ("clock", Ok),
+            ("symbol", Ok),
+            ("key", Ok),
+            ("perms", Warn), // mock key: no IP restriction, futures off
+            ("mode", Ok),
+            ("balance", Ok),
+        ],
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn bybit_signs_verifies_and_reads_every_timeframe() {
+async fn bybit_checklist_and_every_timeframe() {
     let _mock = start_mock(18766);
-    check_venue("bybit", 18766).await;
+    use CheckStatus::*;
+    check_venue(
+        "bybit",
+        18766,
+        &[
+            ("reach", Ok),
+            ("clock", Ok),
+            ("symbol", Ok),
+            ("key", Ok),
+            ("uta", Ok),
+            ("perms", Warn), // read-only
+            ("ip", Warn),    // not bound
+            ("balance", Ok),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn unreachable_venue_fails_reach_and_skips_the_rest() {
+    let opts = ConnectOptions {
+        bybit_url: Some("http://127.0.0.1:9".into()),
+        ..Default::default()
+    };
+    let (conn, report) = Connector::connect(creds("bybit", "x"), &opts).await;
+    assert!(conn.is_none());
+    assert_eq!(report.checks[0].status, CheckStatus::Fail);
+    assert!(report.checks[1..].iter().all(|c| c.status == CheckStatus::Skip));
 }

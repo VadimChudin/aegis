@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use aegis_core::{BrokerId, ConnectOptions, Connector, Credentials, Timeframe};
+use aegis_core::{CheckStatus, ConnectOptions, Connector, Credentials, Timeframe};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -17,20 +17,42 @@ fn options() -> ConnectOptions {
     }
 }
 
-fn creds(password: &str) -> Credentials {
+fn creds(login: &str, password: &str) -> Credentials {
     serde_json::from_value(serde_json::json!({
-        "broker": "roboforex", "login": "1", "password": password, "server": "RoboForex-ECN",
+        "broker": "roboforex", "login": login, "password": password, "server": "RoboForex-ECN",
         "python": std::env::var("AEGIS_TEST_PYTHON").unwrap_or_default()
     }))
     .unwrap()
 }
 
+fn ids(report: &aegis_core::ConnectReport) -> Vec<(&str, CheckStatus)> {
+    report.checks.iter().map(|c| (c.id.as_str(), c.status)).collect()
+}
+
 #[tokio::test]
-async fn connects_and_reads_utc_candles_through_the_bridge() {
-    let (conn, summary) = Connector::connect(creds("good"), &options()).await.expect("connect");
-    assert_eq!(summary.broker, BrokerId::Roboforex);
-    assert_eq!(summary.symbol, "XAUUSD.r");
-    assert!(summary.account.contains("RoboForex-ECN"), "{}", summary.account);
+async fn connects_with_terminal_checklist_and_utc_candles() {
+    let (conn, report) = Connector::connect(creds("1", "good"), &options()).await;
+    let conn = conn.unwrap_or_else(|| panic!("connect: {report:?}"));
+    use CheckStatus::*;
+    assert_eq!(
+        ids(&report),
+        [
+            ("python", Ok),
+            ("package", Ok),
+            ("login", Ok),
+            ("terminal", Ok),
+            ("algo", Warn), // fake terminal has Algo Trading off
+            ("trading", Ok),
+            ("symbol", Ok),
+            ("balance", Ok)
+        ]
+    );
+    assert!(report.ready);
+    assert_eq!(report.symbol.as_deref(), Some("XAUUSD.r"));
+    assert!(
+        report.account.as_deref().unwrap_or("").contains("RoboForex-ECN"),
+        "{report:?}"
+    );
 
     let bars = conn.candles(Timeframe::M15, 3).await.expect("candles");
     assert_eq!(
@@ -41,25 +63,33 @@ async fn connects_and_reads_utc_candles_through_the_bridge() {
 }
 
 #[tokio::test]
-async fn wrong_password_comes_back_as_an_error() {
-    let err = Connector::connect(creds("bad"), &options())
-        .await
-        .err()
-        .expect("must fail")
-        .to_string();
-    assert!(err.contains("Authorization failed"), "{err}");
+async fn wrong_password_fails_login_and_skips_the_terminal() {
+    let (conn, report) = Connector::connect(creds("1", "bad"), &options()).await;
+    assert!(conn.is_none() && !report.connected);
+    use CheckStatus::*;
+    assert_eq!(
+        ids(&report),
+        [("python", Ok), ("package", Ok), ("login", Fail), ("terminal", Skip)]
+    );
+    assert!(report.checks[2].detail.contains("Authorization failed"), "{report:?}");
 }
 
 #[tokio::test]
 async fn non_numeric_login_is_rejected_before_starting_python() {
+    let (conn, report) = Connector::connect(creds("abc", "x"), &options()).await;
+    assert!(conn.is_none());
+    assert_eq!(ids(&report), [("input", CheckStatus::Fail)]);
+    assert_eq!(report.checks[0].detail, "MT5 login must be a number");
+}
+
+#[tokio::test]
+async fn missing_python_is_a_failed_check() {
     let c: Credentials = serde_json::from_value(serde_json::json!({
-        "broker": "roboforex", "login": "abc", "password": "x", "server": "s"
+        "broker": "roboforex", "login": "1", "password": "good", "server": "s", "python": "/nonexistent/python"
     }))
     .unwrap();
-    let err = Connector::connect(c, &options())
-        .await
-        .err()
-        .expect("must fail")
-        .to_string();
-    assert_eq!(err, "MT5 login must be a number");
+    let (conn, report) = Connector::connect(c, &options()).await;
+    assert!(conn.is_none());
+    assert_eq!(report.checks[0].status, CheckStatus::Fail);
+    assert!(report.checks[0].detail.contains("Python was not found"), "{report:?}");
 }
