@@ -14,7 +14,9 @@ use super::{
     bar::Bar,
     model::{row, Model},
     params::{session_id, Params},
+    position::simulate_secs,
     scan::{scan_full, ScanConfig, Touch, KINDS},
+    secs::Sec,
 };
 
 /// Months the score model and the calibration learn from (walk-forward).
@@ -34,14 +36,51 @@ pub struct Trade {
     pub level: f64,
     pub kinds: u16,
     /// "tp", "sl" or "time".
+    /// The 1-second engine adds "be" (breakeven stop), "trail" (trailing stop) and "flow"
+    /// (aggressive volume through the level).
     pub outcome: &'static str,
-    /// Net result in R after commission, spread and slippage.
+    /// Net result in R after commission, spread and slippage; with a flip, both legs.
     pub r: f64,
     /// Calibrated win probability known before the trade.
     pub prob: f64,
+    /// Partial take profit price (NaN: none).
+    pub part: f64,
+    /// The opposite position opened when this one failed (NaN / "" when none).
+    pub flip_time: i64,
+    pub flip_entry: f64,
+    pub flip_exit: f64,
+    pub flip_sl: f64,
+    pub flip_outcome: &'static str,
+    pub flip_r: f64,
 }
 
-fn spread(b: &Bar, assumed: f64) -> f64 {
+impl Trade {
+    pub(crate) fn empty() -> Trade {
+        Trade {
+            entry_time: 0,
+            exit_time: 0,
+            dir: 0,
+            entry: f64::NAN,
+            exit: f64::NAN,
+            sl: f64::NAN,
+            tp: f64::NAN,
+            level: f64::NAN,
+            kinds: 0,
+            outcome: "",
+            r: f64::NAN,
+            prob: f64::NAN,
+            part: f64::NAN,
+            flip_time: 0,
+            flip_entry: f64::NAN,
+            flip_exit: f64::NAN,
+            flip_sl: f64::NAN,
+            flip_outcome: "",
+            flip_r: f64::NAN,
+        }
+    }
+}
+
+pub(crate) fn spread(b: &Bar, assumed: f64) -> f64 {
     if b.spread.is_finite() {
         b.spread
     } else {
@@ -204,6 +243,7 @@ pub fn simulate_in(bars: &[Bar], mins: &[Minute], t: &Touch, p: &Params) -> Opti
             outcome,
             r,
             prob: f64::NAN,
+            ..Trade::empty()
         },
         j_exit,
     ))
@@ -341,6 +381,62 @@ pub struct Stats {
     pub touches: usize,
 }
 
+/// The trades in money: every trade risks `risk_pct` of the account (compounded), the position
+/// is cut when that would need more than `max_leverage`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Money {
+    pub risk_pct: f64,
+    pub max_leverage: f64,
+    /// Account growth over the range, %.
+    pub return_pct: f64,
+    pub max_dd_pct: f64,
+    /// Leverage the full risk would need: median and maximum over trades.
+    pub leverage_median: f64,
+    pub leverage_max: f64,
+    /// Share of trades cut by the leverage limit.
+    pub capped: f64,
+}
+
+pub fn money(trades: &[Trade], risk_pct: f64, max_leverage: f64) -> Money {
+    let mut by_exit: Vec<&Trade> = trades.iter().collect();
+    by_exit.sort_by_key(|t| t.exit_time);
+    let f = risk_pct / 100.0;
+    let (mut eq, mut peak, mut dd, mut capped) = (1.0f64, 1.0f64, 0.0f64, 0usize);
+    let mut lev: Vec<f64> = Vec::with_capacity(trades.len());
+    for t in by_exit {
+        let risk = (t.entry - t.sl).abs();
+        if risk.is_nan() || risk <= 0.0 || !t.r.is_finite() {
+            continue;
+        }
+        // Notional / equity = (f · equity / risk) · price / equity.
+        let need = f * t.entry / risk;
+        lev.push(need);
+        let used = if need > max_leverage {
+            capped += 1;
+            f * max_leverage / need
+        } else {
+            f
+        };
+        eq *= (1.0 + used * t.r).max(0.0);
+        peak = peak.max(eq);
+        dd = dd.max(1.0 - eq / peak);
+    }
+    lev.sort_by(f64::total_cmp);
+    Money {
+        risk_pct,
+        max_leverage,
+        return_pct: 100.0 * (eq - 1.0),
+        max_dd_pct: 100.0 * dd,
+        leverage_median: lev.get(lev.len() / 2).copied().unwrap_or(0.0),
+        leverage_max: lev.last().copied().unwrap_or(0.0),
+        capped: if lev.is_empty() {
+            0.0
+        } else {
+            capped as f64 / lev.len() as f64
+        },
+    }
+}
+
 pub fn wilson_lo(wins: usize, n: usize) -> f64 {
     if n == 0 {
         return 0.0;
@@ -430,6 +526,7 @@ pub struct Report {
     pub by_kind: BTreeMap<String, Stats>,
     pub by_session: BTreeMap<String, Stats>,
     pub by_month: BTreeMap<String, Stats>,
+    pub money: Money,
     /// Share of touches with a probability (the first months only train the model).
     pub scored_from: i64,
     pub params: Params,
@@ -482,6 +579,8 @@ pub struct Engine {
     pub bars: Arc<Vec<Bar>>,
     /// 1m candles for the order of events inside 5m bars (may be empty).
     pub minutes: Arc<Vec<Minute>>,
+    /// 1-second candles for the position engine (may be empty).
+    pub seconds: Arc<Vec<Sec>>,
     pub touches: Vec<Touch>,
     /// Expected touches after the last bar.
     pub pending: Vec<Touch>,
@@ -524,6 +623,7 @@ impl Engine {
         let mut e = Engine {
             bars,
             minutes,
+            seconds: Arc::new(Vec::new()),
             touches,
             pending,
             scores: Vec::new(),
@@ -534,6 +634,23 @@ impl Engine {
         };
         e.scores = e.walk_forward_scores();
         e
+    }
+
+    /// Adds 1-second candles for settings with `sec_engine` on.
+    pub fn with_seconds(mut self, seconds: Arc<Vec<Sec>>) -> Engine {
+        self.seconds = seconds;
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self
+    }
+
+    /// One trade of a touch: the 1-second position engine when `sec_engine` is on, else 5m bars
+    /// with 1m candles.
+    pub fn simulate(&self, t: &Touch, p: &Params) -> Option<(Trade, usize)> {
+        if p.sec_engine {
+            simulate_secs(&self.bars, &self.seconds, t, p)
+        } else {
+            simulate_in(&self.bars, &self.minutes, t, p)
+        }
     }
 
     fn metrics_row(&self, t: &Touch) -> super::model::Row {
@@ -594,7 +711,7 @@ impl Engine {
     }
 
     fn key(p: &Params) -> String {
-        format!(
+        let base = format!(
             "{:.4}|{:.4}|{:.4}|{}|{:.4}|{:.4}|{:.4}|{:.4}|{:.4}|{:.4}|{}",
             p.spread,
             p.sl_atr,
@@ -607,6 +724,28 @@ impl Engine {
             p.min_risk_atr,
             p.max_risk_atr,
             p.on_close()
+        );
+        if !p.sec_engine {
+            return base;
+        }
+        format!(
+            "{base}|s|{}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{:.3}|{:.3}",
+            p.absorb,
+            p.abs_window,
+            p.abs_vol,
+            p.abs_hold_atr,
+            p.abs_confirm_atr,
+            p.abs_stop_atr,
+            p.abs_wait,
+            p.be_r,
+            p.trail_atr,
+            p.trail_from_r,
+            p.part_frac,
+            p.part_r,
+            p.eat_vol,
+            p.flip,
+            p.flip_sl_atr,
+            p.flip_tp_r
         )
     }
 
@@ -616,20 +755,17 @@ impl Engine {
         if let Some(s) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return s.clone();
         }
-        let mut r = Vec::with_capacity(self.touches.len());
-        let mut exit = Vec::with_capacity(self.touches.len());
-        for t in &self.touches {
-            match simulate_in(&self.bars, &self.minutes, t, p) {
-                Some((tr, j)) => {
-                    r.push(tr.r as f32);
-                    exit.push(j as u32);
-                }
-                None => {
-                    r.push(f32::NAN);
-                    exit.push(t.i as u32);
-                }
-            }
-        }
+        let one = |t: &Touch| match self.simulate(t, p) {
+            Some((tr, j)) => (tr.r as f32, j as u32),
+            None => (f32::NAN, t.i as u32),
+        };
+        // The 1-second engine is ~100× slower per touch; spread it over the cores.
+        let (r, exit): (Vec<f32>, Vec<u32>) = if p.sec_engine {
+            use rayon::prelude::*;
+            self.touches.par_iter().map(one).unzip()
+        } else {
+            self.touches.iter().map(one).unzip()
+        };
         let prob = self.calibrate(&r, &exit);
         let sim = Arc::new(Sim { r, exit, prob });
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -678,6 +814,8 @@ impl Engine {
         let filters = p.compiled();
         let max_open = p.max_open.max(1);
         let mut open: Vec<(u32, f64, i8)> = Vec::new();
+        // Daily loss limit: (day, bar of exit, R) of today's trades; only closed ones count.
+        let mut today: Vec<(i64, u32, f64)> = Vec::new();
         let (mut taken, mut passed) = (Vec::new(), Vec::new());
         let lo = self.touches.partition_point(|t| t.i < from_i);
         for k in lo..self.touches.len() {
@@ -699,6 +837,15 @@ impl Engine {
             open.retain(|o| o.0 as usize >= t.i);
             if open.len() >= max_open || open.iter().any(|o| o.2 == t.dir && (o.1 - t.level).abs() < 1e-9) {
                 continue;
+            }
+            if p.day_stop_r > 0.0 {
+                let day = t.time.div_euclid(86_400);
+                today.retain(|x| x.0 == day);
+                let lost: f64 = today.iter().filter(|x| (x.1 as usize) < t.i).map(|x| x.2).sum();
+                if lost <= -p.day_stop_r {
+                    continue;
+                }
+                today.push((day, sim.exit[k], sim.r[k] as f64));
             }
             open.push((sim.exit[k], t.level, t.dir));
             taken.push(k);
@@ -748,7 +895,7 @@ impl Engine {
         taken
             .into_iter()
             .filter_map(|k| {
-                simulate_in(&self.bars, &self.minutes, &self.touches[k], p).map(|(mut tr, _)| {
+                self.simulate(&self.touches[k], p).map(|(mut tr, _)| {
                     tr.prob = sim.prob[k] as f64;
                     tr
                 })
@@ -834,6 +981,7 @@ impl Engine {
             }),
             by_session: group(&|t| vec![session_id(t.entry_time / 3600).to_string()]),
             by_month,
+            money: money(&trades, p.risk_pct, p.max_leverage),
             stats: st,
             trades,
             signals,

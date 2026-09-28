@@ -563,7 +563,11 @@ fn split(a: usize, b: usize) -> Window {
 }
 
 pub fn optimize(engine: &Engine, base: &Params, spec: &GaSpec, progress: &(dyn Fn(Progress) + Sync)) -> OptimizeReport {
-    let genes = genes(spec);
+    // Position settings do nothing on 5m bars; tuning them would only add noise.
+    let genes: Vec<Gene> = genes(spec)
+        .into_iter()
+        .filter(|g| base.sec_engine || !super::params::sec_only(&g.id))
+        .collect();
     let o = Objective {
         target_win_rate: spec.target_win_rate,
         target_trades_per_day: spec.target_trades_per_day,

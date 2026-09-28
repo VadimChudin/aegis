@@ -12,24 +12,29 @@ mod history;
 mod model;
 pub mod news;
 pub mod params;
+pub mod position;
 mod scan;
+pub mod secs;
 pub mod validate;
 
 use std::sync::Arc;
 
 pub use bar::{load_csv, load_minutes, parse_csv, parse_minutes, Bar};
 pub use engine::{
-    month_id, simulate, simulate_in, stats, Engine, ExpectedEntry, LiveReport, Minute, Report, SignalMark, Stats, Trade,
+    money, month_id, simulate, simulate_in, stats, Engine, ExpectedEntry, LiveReport, Minute, Money, Report,
+    SignalMark, Stats, Trade,
 };
 pub use features::{FeatureSpec, FEATURES, NF};
 pub use ga::{optimize, GaSpec, OptimizeReport};
 pub use history::{
-    binance_extras, binance_history, binance_minutes, merge_extras, recent_klines, Extras, HistoryError,
-    BINANCE_LISTING,
+    binance_extras, binance_history, binance_minutes, binance_seconds, merge_extras, recent_klines, Extras,
+    HistoryError, BINANCE_LISTING,
 };
 pub use model::MODEL_FEATURES;
-pub use params::{param_specs, Filter, ParamSpec, Params, SESSIONS};
+pub use params::{param_specs, sec_only, Filter, ParamSpec, Params, SESSIONS};
+pub use position::simulate_secs;
 pub use scan::{scan, scan_full, LevelKind, ScanConfig, Touch, KINDS};
+pub use secs::{load_seconds, save_seconds, Sec};
 pub use validate::{validate, Validation};
 
 pub(crate) fn backtest_month(time: i64) -> String {

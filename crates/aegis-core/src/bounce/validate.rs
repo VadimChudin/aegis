@@ -316,7 +316,7 @@ fn control_engine(e: &Engine) -> Engine {
         control_shift: 1.0,
         ..e.scan
     };
-    Engine::build(e.bars.clone(), e.minutes.clone(), &scan, e.close_entry)
+    Engine::build(e.bars.clone(), e.minutes.clone(), &scan, e.close_entry).with_seconds(e.seconds.clone())
 }
 
 fn permuted_engine(e: &Engine, seed: u64) -> Engine {
@@ -340,6 +340,7 @@ fn permuted_engine(e: &Engine, seed: u64) -> Engine {
         &e.scan,
         e.close_entry,
     )
+    .with_seconds(e.seconds.clone())
 }
 
 fn scored_range(e: &Engine, p: &Params) -> (usize, usize) {
