@@ -7,7 +7,7 @@
 - **Absorption entry** (Bounce → Absorption): wait at the level until aggressive volume hits it and price holds, then enter at market with the stop just behind the absorption extreme (small stop, higher leverage).
 - **Risk:** daily loss limit in R; the backtest shows the result in money for a risk per trade (% of account) and the leverage each trade needs, cut to a max leverage.
 - The genetic algorithm tunes the position settings when the 1-second engine is on; the sliders that have no effect with the current toggles are greyed out with the reason.
-- **Research:** still **no edge**. The best rule (trailing 0.3 ATR on ATR ≥ $5) loses −0.09 R per trade and −0.02 R even with no costs; the flow exit halves the loss of a plain limit; the walk-forward GA loses out of sample (−0.215 R). Details: `docs/research/bounce.md`.
+- **Research:** still **no edge**. The best rule (trailing 0.3 ATR on ATR ≥ $5) loses −0.09 R per trade and −0.02 R even with no costs; the flow exit halves the loss of a plain limit; the walk-forward GA loses out of sample (−0.215 R; with the 70% win-rate target: 66.9% wins, 10 trades a day, −0.066 R). Details: `docs/research/bounce.md`.
 - Still no order placement.
 
 ## 0.4.0 — 2026-09-28

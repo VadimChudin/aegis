@@ -112,6 +112,7 @@ of the stop), no probability model, one position at a time, RoboForex costs with
 | Absorption 3×, trailing 0.3 ATR from 0.5 R, ATR ≥ $5 | 599 | 49.2% | −0.103 |
 | Walk-forward GA over every setting incl. position ones, out of sample (seed 7) | 451 | 42.1% | −0.215 |
 | Same budget, random search, out of sample | 1 159 | 33.8% | −0.177 |
+| GA with the app's targets (70% wins, 20 trades/day), out of sample (seed 7) | 2 123 | 66.9% | −0.066 |
 
 - **Still no edge.** Trailing on a volatile market is the least bad rule, but even without any
   costs it stays below zero, so the entries themselves carry no edge, and exits cannot create one.
@@ -124,7 +125,11 @@ of the stop), no probability model, one position at a time, RoboForex costs with
 - **The GA** fits every training window (+0.02…+0.41 R) and loses in 6 of 7 test windows; 2 of 9
   checks pass. With the GA's settings, random price levels do better than the real levels
   (−0.027 R vs −0.215 R), so the levels themselves are not what earns.
-- The GA's final pick uses a 1.3 ATR stop, trailing 1.6 ATR, 85% partial at 0.5 R,
+- **With the app's targets** (70% wins, 20 trades a day) the GA gets close to the win rate out of
+  sample (66.9%, 10 trades a day) at −0.066 R per trade, the best out-of-sample result so far, but
+  still a loss: 4 of 9 checks pass. The metrics matter (shuffled metrics: −0.53 R), the levels do
+  not (random levels: −0.060 R).
+- The GA's final pick (edge-only fitness) uses a 1.3 ATR stop, trailing 1.6 ATR, 85% partial at 0.5 R,
   a flow exit at 3× and ATR filters: many parameters, fitted to noise.
 
 ## What next
