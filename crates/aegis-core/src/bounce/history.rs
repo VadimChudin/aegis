@@ -195,6 +195,63 @@ async fn binance_klines(
     Ok(bars)
 }
 
+/// 1-second candles since `from` (Unix seconds) from the aggTrades archive, for the position
+/// engine. Each archive is converted once and kept as a small `.sec` file (the zips, about 1 GB
+/// since the listing, are not kept).
+pub async fn binance_seconds(
+    symbol: &str,
+    from: i64,
+    cache: &Path,
+    progress: impl Fn(usize, usize),
+) -> Result<Vec<super::secs::Sec>, HistoryError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| HistoryError::Net(e.to_string()))?;
+    let monthly = list(&client, &format!("data/futures/um/monthly/aggTrades/{symbol}/")).await?;
+    let months: std::collections::HashSet<&str> = monthly.iter().map(|k| tag(k)).collect();
+    let daily: Vec<String> = list(&client, &format!("data/futures/um/daily/aggTrades/{symbol}/"))
+        .await?
+        .into_iter()
+        .filter(|k| !months.contains(&tag(k)[..7.min(tag(k).len())]))
+        .collect();
+    let from_month = super::backtest_month(from);
+    let keys: Vec<&String> = monthly
+        .iter()
+        .filter(|k| tag(k) >= from_month.as_str())
+        .chain(daily.iter().filter(|k| tag(k) >= from_month.as_str()))
+        .collect();
+    if keys.is_empty() {
+        return Err(HistoryError::Empty(symbol.into()));
+    }
+    let dir: PathBuf = cache.join(symbol).join("seconds");
+    std::fs::create_dir_all(&dir).map_err(|e| HistoryError::Archive(e.to_string()))?;
+    let mut all = Vec::new();
+    for (n, key) in keys.iter().enumerate() {
+        progress(n, keys.len());
+        let path = dir.join(format!("{}.sec", tag(key)));
+        let part = match super::secs::load_seconds(&path) {
+            Ok(s) => s,
+            Err(_) => {
+                let bytes = get(&client, &format!("{BASE}/{key}")).await?;
+                let secs = tokio::task::spawn_blocking(move || super::secs::seconds_from_zip(&bytes))
+                    .await
+                    .map_err(|e| HistoryError::Archive(e.to_string()))?
+                    .map_err(HistoryError::Archive)?;
+                let _ = super::secs::save_seconds(&path, &secs);
+                secs
+            }
+        };
+        super::secs::append(&mut all, part);
+    }
+    progress(keys.len(), keys.len());
+    all.retain(|s| s.time >= from);
+    if all.is_empty() {
+        return Err(HistoryError::Empty(symbol.into()));
+    }
+    Ok(all)
+}
+
 /// Unix seconds of "YYYY-MM-DD HH:MM:SS" (UTC).
 fn parse_utc(s: &str) -> Option<i64> {
     let (d, t) = s.trim().split_once(' ')?;

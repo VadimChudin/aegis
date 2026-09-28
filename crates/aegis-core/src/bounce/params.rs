@@ -56,6 +56,47 @@ pub struct Params {
     pub min_prob: f64,
     /// Positions open at the same time (never two on the same level).
     pub max_open: usize,
+    /// Stop taking trades for the day once closed trades of the day lost this many R (0 = off).
+    pub day_stop_r: f64,
+    /// Money view of the backtest: risk per trade, % of the account, and the leverage limit.
+    pub risk_pct: f64,
+    pub max_leverage: f64,
+    /// Simulate on 1-second candles (needs aggTrades history); enables everything below.
+    pub sec_engine: bool,
+    /// Enter on absorption at the level instead of the resting limit (see `position.rs`).
+    pub absorb: bool,
+    /// Seconds of the rolling volume window (absorption and flow exit).
+    pub abs_window: f64,
+    /// Aggressive volume into the level, × the average of the last hour for the window.
+    pub abs_vol: f64,
+    /// How far price may go through the level while it is absorbed, ATR.
+    pub abs_hold_atr: f64,
+    /// Turn off the extreme that confirms the absorption, ATR.
+    pub abs_confirm_atr: f64,
+    /// Stop behind the absorption extreme, ATR.
+    pub abs_stop_atr: f64,
+    /// Give up waiting for absorption (or for the limit fill after it) after this many seconds.
+    pub abs_wait: f64,
+    /// After absorption, rest a limit `abs_limit_atr` off the extreme instead of a market entry.
+    pub abs_limit: bool,
+    pub abs_limit_atr: f64,
+    /// Exit when this share of the absorbed volume has traded at the density price again (0 = off).
+    pub dens_eat: f64,
+    /// Move the stop to breakeven after this many R (0 = off).
+    pub be_r: f64,
+    /// Trailing stop distance, ATR (0 = off), active after `trail_from_r` R.
+    pub trail_atr: f64,
+    pub trail_from_r: f64,
+    /// Close this share at `part_r` R (0 = off).
+    pub part_frac: f64,
+    pub part_r: f64,
+    /// Exit when aggressive volume against the position reaches this × average while price is
+    /// through the level (0 = off).
+    pub eat_vol: f64,
+    /// After the initial stop or a flow exit, open the opposite position (breakout).
+    pub flip: bool,
+    pub flip_sl_atr: f64,
+    pub flip_tp_r: f64,
     /// Metric id → filter.
     pub filters: BTreeMap<String, Filter>,
 }
@@ -92,9 +133,58 @@ impl Default for Params {
             use_model: true,
             min_prob: 0.4,
             max_open: 1,
+            day_stop_r: 0.0,
+            risk_pct: 1.0,
+            max_leverage: 20.0,
+            sec_engine: false,
+            absorb: false,
+            abs_window: 30.0,
+            abs_vol: 3.0,
+            abs_hold_atr: 0.2,
+            abs_confirm_atr: 0.05,
+            abs_stop_atr: 0.05,
+            abs_wait: 300.0,
+            abs_limit: false,
+            abs_limit_atr: 0.05,
+            dens_eat: 0.0,
+            be_r: 0.0,
+            trail_atr: 0.0,
+            trail_from_r: 0.5,
+            part_frac: 0.0,
+            part_r: 0.5,
+            eat_vol: 0.0,
+            flip: false,
+            flip_sl_atr: 0.5,
+            flip_tp_r: 1.0,
             filters: BTreeMap::new(),
         }
     }
+}
+
+/// Settings that only the 1-second engine uses.
+pub fn sec_only(id: &str) -> bool {
+    matches!(
+        id,
+        "absorb"
+            | "abs_window"
+            | "abs_vol"
+            | "abs_hold_atr"
+            | "abs_confirm_atr"
+            | "abs_stop_atr"
+            | "abs_wait"
+            | "abs_limit"
+            | "abs_limit_atr"
+            | "dens_eat"
+            | "be_r"
+            | "trail_atr"
+            | "trail_from_r"
+            | "part_frac"
+            | "part_r"
+            | "eat_vol"
+            | "flip"
+            | "flip_sl_atr"
+            | "flip_tp_r"
+    )
 }
 
 pub fn session_id(hour: i64) -> &'static str {
@@ -181,6 +271,29 @@ impl Params {
             "use_model" => b(self.use_model),
             "min_prob" => self.min_prob,
             "max_open" => self.max_open as f64,
+            "day_stop_r" => self.day_stop_r,
+            "risk_pct" => self.risk_pct,
+            "max_leverage" => self.max_leverage,
+            "sec_engine" => b(self.sec_engine),
+            "absorb" => b(self.absorb),
+            "abs_window" => self.abs_window,
+            "abs_vol" => self.abs_vol,
+            "abs_hold_atr" => self.abs_hold_atr,
+            "abs_confirm_atr" => self.abs_confirm_atr,
+            "abs_stop_atr" => self.abs_stop_atr,
+            "abs_wait" => self.abs_wait,
+            "abs_limit" => b(self.abs_limit),
+            "abs_limit_atr" => self.abs_limit_atr,
+            "dens_eat" => self.dens_eat,
+            "be_r" => self.be_r,
+            "trail_atr" => self.trail_atr,
+            "trail_from_r" => self.trail_from_r,
+            "part_frac" => self.part_frac,
+            "part_r" => self.part_r,
+            "eat_vol" => self.eat_vol,
+            "flip" => b(self.flip),
+            "flip_sl_atr" => self.flip_sl_atr,
+            "flip_tp_r" => self.flip_tp_r,
             "scan.zone_atr" => self.scan.zone_atr,
             "scan.away_atr" => self.scan.away_atr,
             "scan.swing_n" => self.scan.swing_n as f64,
@@ -231,6 +344,29 @@ impl Params {
             "use_model" => self.use_model = on,
             "min_prob" => self.min_prob = v,
             "max_open" => self.max_open = v.round().max(1.0) as usize,
+            "day_stop_r" => self.day_stop_r = v,
+            "risk_pct" => self.risk_pct = v,
+            "max_leverage" => self.max_leverage = v,
+            "sec_engine" => self.sec_engine = on,
+            "absorb" => self.absorb = on,
+            "abs_window" => self.abs_window = v,
+            "abs_vol" => self.abs_vol = v,
+            "abs_hold_atr" => self.abs_hold_atr = v,
+            "abs_confirm_atr" => self.abs_confirm_atr = v,
+            "abs_stop_atr" => self.abs_stop_atr = v,
+            "abs_wait" => self.abs_wait = v,
+            "abs_limit" => self.abs_limit = on,
+            "abs_limit_atr" => self.abs_limit_atr = v,
+            "dens_eat" => self.dens_eat = v,
+            "be_r" => self.be_r = v,
+            "trail_atr" => self.trail_atr = v,
+            "trail_from_r" => self.trail_from_r = v,
+            "part_frac" => self.part_frac = v,
+            "part_r" => self.part_r = v,
+            "eat_vol" => self.eat_vol = v,
+            "flip" => self.flip = on,
+            "flip_sl_atr" => self.flip_sl_atr = v,
+            "flip_tp_r" => self.flip_tp_r = v,
             "scan.zone_atr" => self.scan.zone_atr = v,
             "scan.away_atr" => self.scan.away_atr = v,
             "scan.swing_n" => self.scan.swing_n = v.round().max(1.0) as usize,
@@ -306,6 +442,8 @@ pub fn param_specs() -> Vec<ParamSpec> {
             tunable: !(id.starts_with("scan.")
                 || id == "entry"
                 || id == "use_model"
+                || id == "sec_engine"
+                || group == "Risk"
                 || group == "Costs"
                 || id == "min_risk_atr"
                 || id == "max_risk_atr"),
@@ -362,6 +500,155 @@ pub fn param_specs() -> Vec<ParamSpec> {
         10.0,
         1.0,
         "How many positions may be open together (never two on the same level). More positions = more trades per day.",
+    );
+    push("sec_engine", "Position", "1-second engine", "toggle", 0., 1., 1., "Simulate entries and exits second by second on Binance aggTrades (downloads about 1 GB once). Needed for absorption, breakeven, trailing, partial exits, the flow exit and the flip.");
+    push(
+        "be_r",
+        "Position",
+        "Breakeven after, R",
+        "slider",
+        0.0,
+        2.0,
+        0.05,
+        "Move the stop to entry plus costs once price has gone this many R in favour. 0 = off.",
+    );
+    push(
+        "trail_atr",
+        "Position",
+        "Trailing stop, ATR",
+        "slider",
+        0.0,
+        2.0,
+        0.05,
+        "Keep the stop this far behind the best price. 0 = off.",
+    );
+    push(
+        "trail_from_r",
+        "Position",
+        "Trailing starts after, R",
+        "slider",
+        0.0,
+        2.0,
+        0.05,
+        "",
+    );
+    push(
+        "part_frac",
+        "Position",
+        "Partial exit, share",
+        "slider",
+        0.0,
+        0.9,
+        0.05,
+        "Close this share of the position at the partial target. 0 = off.",
+    );
+    push("part_r", "Position", "Partial target, R", "slider", 0.2, 3.0, 0.05, "");
+    push("eat_vol", "Position", "Flow exit, × average volume", "slider", 0.0, 20.0, 0.5, "Exit at market when aggressive volume against the position over the volume window reaches this multiple of the hour's average while price is through the level: the level is being eaten. 0 = off.");
+    push("flip", "Position", "Flip on failure", "toggle", 0., 1., 1., "When the position ends at its first stop or by the flow exit, open the opposite position at market (the breakout). Its R is added to the trade.");
+    push(
+        "flip_sl_atr",
+        "Position",
+        "Flip stop behind level, ATR",
+        "slider",
+        0.0,
+        2.0,
+        0.05,
+        "",
+    );
+    push("flip_tp_r", "Position", "Flip target, R", "slider", 0.2, 3.0, 0.05, "");
+    push("absorb", "Absorption", "Enter on absorption", "toggle", 0., 1., 1., "Instead of a resting limit: wait at the level until aggressive volume hits it and price holds, then enter at market with the stop just behind the absorption extreme (a small stop).");
+    push(
+        "abs_window",
+        "Absorption",
+        "Volume window, s",
+        "slider",
+        5.0,
+        120.0,
+        5.0,
+        "Rolling window for the absorption volume and the flow exit.",
+    );
+    push("abs_vol", "Absorption", "Absorbed volume, × average", "slider", 0.5, 20.0, 0.5, "Aggressive volume into the level over the window, as a multiple of the average for the window over the last hour.");
+    push(
+        "abs_hold_atr",
+        "Absorption",
+        "Max push through level, ATR",
+        "slider",
+        0.0,
+        1.0,
+        0.02,
+        "If price goes further through the level, nothing is holding it: no entry.",
+    );
+    push(
+        "abs_confirm_atr",
+        "Absorption",
+        "Turn off the extreme, ATR",
+        "slider",
+        0.0,
+        0.5,
+        0.01,
+        "Enter once price has moved this far back from the absorption extreme.",
+    );
+    push(
+        "abs_stop_atr",
+        "Absorption",
+        "Stop behind the extreme, ATR",
+        "slider",
+        0.0,
+        0.5,
+        0.01,
+        "",
+    );
+    push(
+        "abs_wait",
+        "Absorption",
+        "Max wait, s",
+        "slider",
+        30.0,
+        1800.0,
+        30.0,
+        "Give up when no absorption comes this long after price reached the level.",
+    );
+    push("abs_limit", "Absorption", "Limit after absorption", "toggle", 0., 1., 1., "After the absorption, rest a limit order near its extreme and wait for the pull-back instead of entering at market: no spread or slippage on the entry, maker fee, but some trades never fill.");
+    push(
+        "abs_limit_atr",
+        "Absorption",
+        "Limit off the extreme, ATR",
+        "slider",
+        0.0,
+        0.3,
+        0.01,
+        "",
+    );
+    push("dens_eat", "Absorption", "Exit when density eaten, share", "slider", 0.0, 1.0, 0.05, "The volume absorbed at entry is the density the stop hides behind. Exit at market when aggressive volume at that price reaches this share of it again, before the stop. 0.7 = leave with 30% left. 0 = off. Estimated from trades, not from the order book.");
+    push(
+        "day_stop_r",
+        "Risk",
+        "Daily loss limit, R",
+        "slider",
+        0.0,
+        10.0,
+        0.5,
+        "No new trades on a day once its closed trades lost this many R. 0 = off.",
+    );
+    push(
+        "risk_pct",
+        "Risk",
+        "Risk per trade, % of account",
+        "slider",
+        0.1,
+        5.0,
+        0.1,
+        "Money view only: position size = this share of the account / stop distance. It does not change R.",
+    );
+    push(
+        "max_leverage",
+        "Risk",
+        "Max leverage",
+        "slider",
+        1.0,
+        100.0,
+        1.0,
+        "A trade whose stop is so small that the risk needs more leverage is cut to this leverage.",
     );
     push(
         "min_risk_atr",

@@ -12,7 +12,7 @@ use std::{
 
 use aegis_core::bounce::{
     self, ga::DEFAULT_METRICS, Bar, Engine, FeatureSpec, GaSpec, LiveReport, Minute, OptimizeReport, ParamSpec, Params,
-    Report, Validation, FEATURES, KINDS, SESSIONS,
+    Report, Sec, Validation, FEATURES, KINDS, SESSIONS,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -32,6 +32,8 @@ type History = Mutex<Option<(Instant, Arc<Vec<Bar>>, Arc<Vec<Minute>>, String)>>
 #[derive(Default)]
 pub struct BounceState {
     history: History,
+    /// 1-second candles, loaded the first time the 1-second engine is used.
+    seconds: Mutex<Option<Arc<Vec<Sec>>>>,
     engine: Cached<Engine>,
     optimizing: AtomicBool,
 }
@@ -186,10 +188,37 @@ async fn history(app: &AppHandle, state: &AppState) -> Result<(Arc<Vec<Bar>>, Ar
     Ok((bars, mins, source))
 }
 
+/// 1-second candles since the listing: `AEGIS_SECONDS_FILE` (a file from the research CLI's
+/// `seconds` command) or the aggTrades archive, converted once and cached on disk.
+async fn seconds(app: &AppHandle, state: &AppState) -> Result<Arc<Vec<Sec>>, String> {
+    let mut slot = state.bounce.seconds.lock().await;
+    if let Some(s) = slot.as_ref() {
+        return Ok(s.clone());
+    }
+    let secs = if let Ok(path) = std::env::var("AEGIS_SECONDS_FILE") {
+        bounce::load_seconds(std::path::Path::new(&path))?
+    } else {
+        let a2 = app.clone();
+        bounce::binance_seconds(SYMBOL, bounce::BINANCE_LISTING, &state.cache_dir, move |done, total| {
+            emit(&a2, "Downloading Binance trades for the 1-second engine", done, total)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    let secs = Arc::new(secs);
+    *slot = Some(secs.clone());
+    Ok(secs)
+}
+
 /// The engine for these settings' level scan and entry mode, built once and reused.
 async fn engine(app: &AppHandle, state: &AppState, p: &Params) -> Result<(Arc<Engine>, String), String> {
     let (bars, mins, source) = history(app, state).await?;
-    let key = format!("{:?}|{}|{}", p.scan, p.on_close(), bars.len());
+    let secs = if p.sec_engine {
+        seconds(app, state).await?
+    } else {
+        state.bounce.seconds.lock().await.clone().unwrap_or_default()
+    };
+    let key = format!("{:?}|{}|{}|{}", p.scan, p.on_close(), bars.len(), secs.len());
     if let Some((k, e)) = state.bounce.engine.lock().await.as_ref() {
         if *k == key {
             return Ok((e.clone(), source));
@@ -197,9 +226,11 @@ async fn engine(app: &AppHandle, state: &AppState, p: &Params) -> Result<(Arc<En
     }
     emit(app, "Finding levels and training the model", 0, 1);
     let (scan, close) = (p.scan, p.on_close());
-    let e = tauri::async_runtime::spawn_blocking(move || Arc::new(Engine::build(bars, mins, &scan, close)))
-        .await
-        .map_err(|e| e.to_string())?;
+    let e = tauri::async_runtime::spawn_blocking(move || {
+        Arc::new(Engine::build(bars, mins, &scan, close).with_seconds(secs))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     *state.bounce.engine.lock().await = Some((key, e.clone()));
     Ok((e, source))
 }
@@ -382,8 +413,17 @@ pub async fn bounce_live(app: AppHandle, state: State<'_, AppState>, params: Par
         Ok(_) => (false, "live klines empty; using the archive".to_string()),
         Err(e) => (false, format!("live klines unavailable ({e}); using the archive")),
     };
+    // Expected entries never download trades: without loaded seconds the probabilities are
+    // calibrated on the bar engine.
+    let secs = state.bounce.seconds.lock().await.clone();
+    let mut params = params;
+    if secs.is_none() {
+        params.sec_engine = false;
+    }
     let live = tauri::async_runtime::spawn_blocking(move || {
-        Engine::build(Arc::new(merged), mins, &params.scan, params.on_close()).live(&params)
+        Engine::build(Arc::new(merged), mins, &params.scan, params.on_close())
+            .with_seconds(secs.unwrap_or_default())
+            .live(&params)
     })
     .await
     .map_err(|e| e.to_string())?;

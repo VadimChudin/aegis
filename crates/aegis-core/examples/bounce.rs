@@ -6,8 +6,12 @@
 //!   bounce optimize bars.csv [ga.json] [params.json]     walk-forward GA + checks
 //!   bounce ga-noise bars.csv [ga.json] [params.json]     the same GA on permuted metrics
 //!   bounce liveness bars.csv [params.json]               does every setting change the result?
+//!   bounce seconds  aggTrades-dir out.sec                1-second candles for the position engine
+//!   bounce sweep    bars.csv params.jsonl                one line of stats per settings line, with
+//!                                                        the first and second half of the history
 //!
-//! Set TRADES=path to write the trades of backtest/optimize as CSV.
+//! Set TRADES=path to write the trades of backtest/optimize as CSV, MINUTES=path for 1m candles
+//! and SECONDS_FILE=path (a file from `seconds` or an aggTrades directory) for the 1-second engine.
 
 use std::{io::Write, path::Path, sync::Arc, time::Instant};
 
@@ -39,14 +43,30 @@ fn write_trades(trades: &[Trade]) {
         let mut out = std::fs::File::create(path).expect("trades file");
         writeln!(
             out,
-            "entry_time,exit_time,dir,entry,exit,sl,tp,level,kinds,outcome,r,prob"
+            "entry_time,exit_time,dir,entry,exit,sl,tp,level,kinds,outcome,r,prob,part,flip_entry,flip_exit,flip_outcome,flip_r"
         )
         .unwrap();
         for t in trades {
             writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{:.4},{:.4}",
-                t.entry_time, t.exit_time, t.dir, t.entry, t.exit, t.sl, t.tp, t.level, t.kinds, t.outcome, t.r, t.prob
+                "{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{},{},{},{},{:.4}",
+                t.entry_time,
+                t.exit_time,
+                t.dir,
+                t.entry,
+                t.exit,
+                t.sl,
+                t.tp,
+                t.level,
+                t.kinds,
+                t.outcome,
+                t.r,
+                t.prob,
+                t.part,
+                t.flip_entry,
+                t.flip_exit,
+                t.flip_outcome,
+                t.flip_r
             )
             .unwrap();
         }
@@ -70,6 +90,12 @@ fn brief(s: &bounce::Stats) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args[0] == "seconds" {
+        let s = bounce::load_seconds(Path::new(&args[1])).expect("aggTrades");
+        bounce::save_seconds(Path::new(&args[2]), &s).expect("write");
+        eprintln!("{} seconds", s.len());
+        return;
+    }
     let bars = Arc::new(bounce::load_csv(Path::new(&args[1])).expect("bars"));
     // MINUTES=path: 1m candles to resolve the order of events inside 5m bars.
     let minutes = Arc::new(
@@ -78,7 +104,14 @@ fn main() {
             .map(|p| bounce::load_minutes(Path::new(&p)).expect("minutes"))
             .unwrap_or_default(),
     );
-    let engine = |p: &Params| Engine::build(bars.clone(), minutes.clone(), &p.scan, p.on_close());
+    let seconds = Arc::new(
+        std::env::var("SECONDS_FILE")
+            .ok()
+            .map(|p| bounce::load_seconds(Path::new(&p)).expect("seconds"))
+            .unwrap_or_default(),
+    );
+    let engine =
+        |p: &Params| Engine::build(bars.clone(), minutes.clone(), &p.scan, p.on_close()).with_seconds(seconds.clone());
     let t0 = Instant::now();
     match args[0].as_str() {
         "touches" => {
@@ -215,9 +248,7 @@ fn main() {
             let mut engines: std::collections::HashMap<String, Engine> = Default::default();
             let engine_for = |engines: &mut std::collections::HashMap<String, Engine>, p: &Params| -> String {
                 let key = format!("{:?}{}", p.scan, p.on_close());
-                engines
-                    .entry(key.clone())
-                    .or_insert_with(|| Engine::build(bars.clone(), minutes.clone(), &p.scan, p.on_close()));
+                engines.entry(key.clone()).or_insert_with(|| engine(p));
                 key
             };
             let fp = |e: &Engine, p: &Params| {
@@ -295,6 +326,26 @@ fn main() {
                 "{}",
                 serde_json::json!({"live": live, "dead": dead, "no_data": no_data, "total": live + dead.len() + no_data.len(), "base": f0, "seconds": t0.elapsed().as_secs_f64()})
             );
+        }
+        "sweep" => {
+            // One engine per level scan; every line is a Params JSON.
+            let text = std::fs::read_to_string(&args[2]).expect("params.jsonl");
+            let mut engines: std::collections::HashMap<String, Engine> = Default::default();
+            let mid = bars[bars.len() / 2].time;
+            let (from, to) = (bars[0].time, bars[bars.len() - 1].time + 300);
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let p: Params = serde_json::from_str(line).expect("params line");
+                let key = format!("{:?}{}", p.scan, p.on_close());
+                let e = engines.entry(key).or_insert_with(|| engine(&p));
+                let tr = e.trades(&p, 0, e.bars.len());
+                let (a, b): (Vec<Trade>, Vec<Trade>) = tr.iter().cloned().partition(|t| t.entry_time < mid);
+                let r = e.report(&p);
+                println!(
+                    "{}",
+                    serde_json::json!({"all": bounce::stats(&tr, from, to), "h1": bounce::stats(&a, from, mid),
+                        "h2": bounce::stats(&b, mid, to), "money": r.money, "params": serde_json::from_str::<serde_json::Value>(line).unwrap()})
+                );
+            }
         }
         other => panic!("unknown command {other}"),
     }

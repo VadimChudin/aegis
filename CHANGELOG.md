@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 2026-09-28
+
+- **1-second position engine** (Bounce → Position → *1-second engine*): entries and exits are simulated second by second on Binance aggTrades (downloaded once and kept as 1-second candles with buy and sell volume). It agrees with the bar engine when no management is set.
+- **Position management:** breakeven after N R, trailing stop in ATR (from N R), partial exit (share and target), **flow exit** (aggressive volume against the position while price is through the level: the level is being eaten), **flip** into the breakout after the first stop or a flow exit.
+- **Absorption entry** (Bounce → Absorption): wait at the level until aggressive volume hits it and price holds, then enter at market with the stop just behind the absorption extreme (small stop, higher leverage).
+- **Density exit** (leave before the stop when the absorbed volume behind it is being eaten, e.g. 70%) and **limit after absorption** (wait for the pull-back instead of a market entry).
+- **Risk:** daily loss limit in R; the backtest shows the result in money for a risk per trade (% of account) and the leverage each trade needs, cut to a max leverage.
+- The genetic algorithm tunes the position settings when the 1-second engine is on; the sliders that have no effect with the current toggles are greyed out with the reason.
+- **Research:** still **no edge**. The best rule (trailing 0.3 ATR on ATR ≥ $5) loses −0.09 R per trade and −0.02 R even with no costs; the flow exit halves the loss of a plain limit; the walk-forward GA loses out of sample (−0.215 R; with the 70% win-rate target: 66.9% wins, 10 trades a day, −0.066 R). Details: `docs/research/bounce.md`.
+- Still no order placement.
+
 ## 0.4.0 — 2026-09-28
 
 - **Correction: the v0.3.0 backtest results were wrong.** When a bar touched several levels, the scanner took the level nearest the bar's low/high, which uses where price turned (look-ahead). Fixed: the first level price reaches is the touched one. With the corrected engine the Bounce strategy has **no edge** on Binance XAUUSDT 5m: every touch loses about −0.15 R per trade after RoboForex costs, even before costs it loses. The "70%" presets are removed. Details: `docs/research/bounce.md`.

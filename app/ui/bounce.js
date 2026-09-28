@@ -15,7 +15,7 @@
     roboforex: { label: "RoboForex ECN costs", set: { maker_bps: 0.2, taker_bps: 0.2, slippage: 0.15, spread: 0.2 } },
     binance: { label: "Binance costs", set: { maker_bps: 2, taker_bps: 5, slippage: 0.05, spread: 0.02 } },
   };
-  const GROUP_ORDER = ["Probability", "Trade", "Costs", "Direction", "Levels", "Sessions", "Touch"];
+  const GROUP_ORDER = ["Probability", "Trade", "Position", "Absorption", "Risk", "Costs", "Direction", "Levels", "Sessions", "Touch"];
   const KEY_METRICS = 10;
   const LIVE_EVERY_MS = 5 * 60 * 1000;
   const TABS = [
@@ -148,14 +148,31 @@
 
   function toggleRow(spec) {
     const on = !!getParam(spec.id);
-    return `<div class="bt-row" title="${esc(t(spec.help))}"><span class="bt-label">${esc(t(spec.label))}${spec.rescan ? ` <span class="tag">${esc(t("rescan"))}</span>` : ""}</span>
-      <button type="button" class="toggle${on ? " on" : ""}" data-id="${esc(spec.id)}" data-kind="toggle"><span class="knob"></span></button></div>`;
+    const off = inactive(spec.id);
+    const tag = off ? ` <span class="tag">${esc(off)}</span>` : spec.rescan ? ` <span class="tag">${esc(t("rescan"))}</span>` : "";
+    return `<div class="bt-row${off ? " off" : ""}" title="${esc(off || t(spec.help))}"><span class="bt-label">${esc(t(spec.label))}${tag}</span>
+      <button type="button" class="toggle${on ? " on" : ""}" data-id="${esc(spec.id)}" data-kind="toggle" ${off ? "disabled" : ""}><span class="knob"></span></button></div>`;
   }
+
+  // Settings only the 1-second engine uses (params.rs `sec_only`).
+  const SEC_ONLY = new Set(["absorb", "abs_window", "abs_vol", "abs_hold_atr", "abs_confirm_atr", "abs_stop_atr", "abs_wait", "abs_limit", "abs_limit_atr", "dens_eat", "be_r", "trail_atr", "trail_from_r", "part_frac", "part_r", "eat_vol", "flip", "flip_sl_atr", "flip_tp_r"]);
 
   /** Why a setting has no effect with the current toggles ("" when it is active). */
   function inactive(id) {
     if (id === "min_prob" && !B.params.use_model) return t("Only with the probability model on.");
-    if (id === "fill_through" && B.params.entry === "close") return t("Only for limit entries.");
+    const p = B.params;
+    if (id === "fill_through" && (p.entry === "close" || (p.sec_engine && p.absorb))) return t("Only for limit entries.");
+    if (SEC_ONLY.has(id) && !p.sec_engine) return t("Only with the 1-second engine.");
+    if (id === "absorb" && p.entry === "close") return t("Only for limit entries.");
+    if ((id.startsWith("abs_") && id !== "abs_window") || id === "dens_eat") {
+      if (!p.absorb) return t("Only with absorption entry.");
+    }
+    if (id === "abs_limit_atr" && !p.abs_limit) return t("Only with the limit after absorption.");
+    if (id === "abs_window" && !p.absorb && !(p.eat_vol > 0)) return t("Only with absorption entry or the flow exit.");
+    if (id === "sl_atr" && p.sec_engine && p.absorb && p.entry !== "close") return t("Absorption sets the stop.");
+    if (id === "trail_from_r" && !(p.trail_atr > 0)) return t("Only with a trailing stop.");
+    if (id === "part_r" && !(p.part_frac > 0)) return t("Only with a partial exit.");
+    if ((id === "flip_sl_atr" || id === "flip_tp_r") && !p.flip) return t("Only with the flip on.");
     return "";
   }
 
@@ -300,6 +317,31 @@
     )}</th></tr>${rows}</table></div>`;
   }
 
+  const OUTCOMES = { tp: "Target", sl: "Stop", be: "Breakeven", trail: "Trailing stop", flow: "Flow exit", dens: "Density eaten", time: "time" };
+  const outcome = (o) => t(OUTCOMES[o] || o);
+
+  function exitHtml(tr) {
+    const part = Number.isFinite(tr.part) ? ` · ${t("partial")}` : "";
+    const flip = tr.flip_outcome ? ` → ${t("flip")} ${outcome(tr.flip_outcome)} ${num(tr.flip_r)}` : "";
+    return esc(outcome(tr.outcome) + part + flip);
+  }
+
+  /** The backtest in money: risk per trade of the account and the leverage it needs. */
+  function moneyHtml(m) {
+    if (!m) return "";
+    return `<p class="hint">${esc(
+      t("Money at {risk}% risk per trade: account {ret}%, max drawdown {dd}%. Leverage needed: median {lm}×, max {lx}× ({cap} cut to {max}×).", {
+        risk: num(m.risk_pct, 1),
+        ret: num(m.return_pct, 1),
+        dd: num(m.max_dd_pct, 1),
+        lm: num(m.leverage_median, 1),
+        lx: num(m.leverage_max, 0),
+        cap: pct(m.capped),
+        max: num(m.max_leverage, 0),
+      }),
+    )}</p>`;
+  }
+
   function tradesHtml(trades, source) {
     const last = trades.slice(-150).reverse();
     const rows = last
@@ -307,7 +349,7 @@
         const i = trades.indexOf(tr);
         return `<tr data-trade="${i}" data-src="${source}" class="${B.selected === `${source}:${i}` ? "sel" : ""}"><td>${esc(fmtDate(tr.entry_time))}</td><td class="${
           tr.dir > 0 ? "pos" : "neg"
-        }">${esc(t(tr.dir > 0 ? "Long" : "Short"))}</td><td>${num(tr.entry)}</td><td>${pct(tr.prob, 0)}</td><td>${esc(t(tr.outcome))}</td><td class="${
+        }">${esc(t(tr.dir > 0 ? "Long" : "Short"))}</td><td>${num(tr.entry)}</td><td>${pct(tr.prob, 0)}</td><td>${exitHtml(tr)}</td><td class="${
           tr.r > 0 ? "pos" : "neg"
         }">${num(tr.r)}</td></tr>`;
       })
@@ -348,7 +390,7 @@
         : `<p class="hint">${esc(B.result.source)} · ${esc(fmtDay(r.from))} → ${esc(fmtDay(r.to))} UTC · ${r.bars} ${esc(t("bars"))}. ${esc(
             t("Probabilities are out of sample: each month is scored and calibrated only from the months before it."),
           )}</p>`;
-    return `${run}${statsHtml(s)}${losing}${note}${equity(r.equity)}
+    return `${run}${statsHtml(s)}${losing}${note}${moneyHtml(r.money)}${equity(r.equity)}
       <div class="bt-btns"><button type="button" class="ghost sm" data-show="backtest">${esc(t("Show on chart"))}</button></div>
       ${tableHtml(t("By month"), r.by_month)}${tableHtml(t("By session"), r.by_session)}${tableHtml(t("By level kind"), r.by_kind, kinds)}${tradesHtml(r.trades, "backtest")}`;
   }
@@ -586,7 +628,7 @@
         el.classList.toggle("on");
         setParam(el.dataset.id, el.classList.contains("on"));
         if (el.dataset.id === "entry") B.available = null;
-        if (el.dataset.id === "entry" || el.dataset.id === "use_model") render();
+        if (["entry", "use_model", "sec_engine", "absorb", "abs_limit", "flip"].includes(el.dataset.id)) render();
       };
     });
     body.querySelectorAll('#btSettings [data-kind="slider"]').forEach((r) => {
@@ -596,6 +638,8 @@
         const id = r.dataset.id;
         setParam(id, ["max_bars", "max_open", "scan.swing_n"].includes(id) ? Math.round(v) : v);
       };
+      // These switch other sliders on or off at 0.
+      if (["trail_atr", "part_frac", "eat_vol"].includes(r.dataset.id)) r.onchange = () => render();
     });
     body.querySelectorAll(".bt-filter").forEach((row) => {
       const id = row.dataset.id;
