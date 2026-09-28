@@ -7,6 +7,8 @@
 //!   bounce ga-noise bars.csv [ga.json] [params.json]     the same GA on permuted metrics
 //!   bounce liveness bars.csv [params.json]               does every setting change the result?
 //!   bounce seconds  aggTrades-dir out.sec                1-second candles for the position engine
+//!   bounce sweep    bars.csv params.jsonl                one line of stats per settings line, with
+//!                                                        the first and second half of the history
 //!
 //! Set TRADES=path to write the trades of backtest/optimize as CSV, MINUTES=path for 1m candles
 //! and SECONDS_FILE=path (a file from `seconds` or an aggTrades directory) for the 1-second engine.
@@ -324,6 +326,26 @@ fn main() {
                 "{}",
                 serde_json::json!({"live": live, "dead": dead, "no_data": no_data, "total": live + dead.len() + no_data.len(), "base": f0, "seconds": t0.elapsed().as_secs_f64()})
             );
+        }
+        "sweep" => {
+            // One engine per level scan; every line is a Params JSON.
+            let text = std::fs::read_to_string(&args[2]).expect("params.jsonl");
+            let mut engines: std::collections::HashMap<String, Engine> = Default::default();
+            let mid = bars[bars.len() / 2].time;
+            let (from, to) = (bars[0].time, bars[bars.len() - 1].time + 300);
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let p: Params = serde_json::from_str(line).expect("params line");
+                let key = format!("{:?}{}", p.scan, p.on_close());
+                let e = engines.entry(key).or_insert_with(|| engine(&p));
+                let tr = e.trades(&p, 0, e.bars.len());
+                let (a, b): (Vec<Trade>, Vec<Trade>) = tr.iter().cloned().partition(|t| t.entry_time < mid);
+                let r = e.report(&p);
+                println!(
+                    "{}",
+                    serde_json::json!({"all": bounce::stats(&tr, from, to), "h1": bounce::stats(&a, from, mid),
+                        "h2": bounce::stats(&b, mid, to), "money": r.money, "params": serde_json::from_str::<serde_json::Value>(line).unwrap()})
+                );
+            }
         }
         other => panic!("unknown command {other}"),
     }

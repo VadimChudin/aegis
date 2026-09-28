@@ -132,6 +132,22 @@ of the stop), no probability model, one position at a time, RoboForex costs with
 - The GA's final pick (edge-only fitness) uses a 1.3 ATR stop, trailing 1.6 ATR, 85% partial at 0.5 R,
   a flow exit at 3× and ATR filters: many parameters, fitted to noise.
 
+### Big-volume entries only (absorption sweep)
+
+3 456 settings of the absorption entry (volume 3–12× the average, window 15–60 s, stop 0.02–0.1
+ATR behind the absorption extreme, partial exits, breakeven, target 1–3 R, ATR filter), weekdays,
+RoboForex costs (`bounce sweep`, first and second half of the history reported apart):
+
+- None with at least 100 trades is profitable. Picking the best by the first half gives −0.33 R
+  on the second.
+- **Partial exits raise the win rate but not R:** 32% → 51% wins (70% off at 0.5 R), average R the
+  same (−0.245). The best win rate is 60% at 6 trades a day: wins +0.44 R, losses −1.14 R.
+- **There is a gross edge on big volume:** absorption ≥ 8×, target 2–3 R, no partial exit earns
+  +0.17…+0.26 R per trade before costs, in both halves. Costs take it: the entry is at market and
+  the stop is small, so spread + slippage + fees are 0.2–0.3 R. With a minimum stop of 0.4 ATR it
+  is −0.006 R at RoboForex costs and +0.066 R at half of them ($0.10 spread, $0.05 slippage), on
+  only 0.6–0.9 trades a day.
+
 ## What next
 
 - **Breakout.** Bounce loses because price usually runs through levels; the same data suggests
