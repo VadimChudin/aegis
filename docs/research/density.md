@@ -18,6 +18,7 @@ python -m aegis_lab.data.bybit_history                 # download book + tape (c
 python -m aegis_lab.research.density extract           # replay the book, one .npz per day
 python -m aegis_lab.research.density_report            # bounce vs break by metric
 python -m aegis_lab.research.density_sim [--grid]      # the trader's execution
+python -m aegis_lab.research.density_cycle --grid breakout|bounce|flip   # limit-only cycle
 ```
 
 Replay notes: the book feed trails the tape by ~40 ms (median) and leads it in ~13% of
@@ -83,10 +84,43 @@ $1/3/6/10.
 Gold moves ~5x less than a typical crypto altcoin in % per day while the fee in % is the same:
 a density scalp that pays on altcoins does not cover a taker exit on gold.
 
+## Limit orders only: breakout, bounce, flip (`density_cycle`)
+
+Everything that can be a limit is a limit: entries, the target, trailing, fade and *gone* exits
+(a signal posts a limit one tick on the other side and waits; market only `chase` ticks further
+against). Optionally the stop too: wait for the pull-back to the density with a market
+catastrophe stop further away. Same split (Mar-Jun / Jul-Sep, weekdays).
+
+**Breakout** (a density that stood 10 s is traded through):
+- *Market entry* at the break: 53% of breakouts reach +$1 before −$0.30 if you are filled on the
+  print that went through, but that print is inside the sweep. With 100 ms latency the entry is
+  a median $0.36 beyond the density and the edge shrinks to **+$0.15…0.27/oz gross**, against a
+  $2.45/oz taker round trip (promotion). Targets of $10-30 do worse than $1-3: moves after a
+  density breaks are short.
+- *Limit on the retest* (cascade from $0.30 beyond the density back to it): price returns to
+  the density in 91% of breakouts, and those fills are the failed ones: 78% hit the stop.
+  **1 of 972 settings is positive even with no fees**; none with fees.
+
+**Bounce with limit exits:** gross stays positive (best out of sample +$0.26/oz: ≥ 50 oz,
+width $0.10, stop $0.10), but ~70% of trades end at the stop: once the limits fill, the density
+is usually being eaten, and a resting exit is not filled while price runs through. Only 22-28%
+of the volume leaves as maker, so the promotion still costs more than the edge (best −$0.44/oz).
+A stop by limit (wait for the pull-back, catastrophe stop $1-10) raises maker exits to 70-87%
+but turns the gross negative (−$0.07…−0.27/oz): waiting for the pull-back costs more than the fee
+it saves. Trailing ($0.30/$1.00 behind the best after +$0.50) changes the result by a few cents.
+
+**Flip** (after a stopped bounce, the breakout of the same density by retest limits): the flip
+leg is negative before fees in all 64 settings (−$0.09…−0.19/oz, 4-11% winners). It adds losses.
+
+**No net-positive setting exists for breakout, bounce or flip on Bybit fees.** The gross edge per
+trade on gold is $0.1-0.3/oz; one taker fill costs $1.22/oz (promotion) or $2.45/oz (standard).
+
 ## Next
 
-- Maker-only exits (exits as resting limits, the stop only as the last resort) - the only way
-  the promotion fee can be 0 on most exits.
+- ~~Maker-only exits~~: tested above, not enough.
+- Trade larger moves: fees are fixed per oz, so a setup aiming at $10-30 (levels and zones on
+  15m-4h, smart-money style) pays 5-10% of the move in fees instead of 400%. Densities can then
+  serve as the trigger/filter at the zone.
 - Cheaper execution: RoboForex spread + commission per oz (need the account's numbers), with the
   density read from Bybit.
 - Densities as a filter for the level strategies rather than a scalp: a standing ≥ 20 oz density
