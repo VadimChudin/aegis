@@ -15,6 +15,7 @@ Desktop terminal for automated gold (XAU) trading. **v0.5.0:** the gold chart fr
 - **Design and themes** from Vespera: Glass dark, Glass light, Glass blue.
 - **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m and 1m history (public archive, no key) and shows the result; *Genetic algorithm* tunes the settings walk-forward; *Checks* tests whether a result is real; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability.
 - **1-second position engine** (Bounce → Position): entries and exits are simulated second by second on Binance aggTrades (downloaded once, about 1 GB, kept as 1-second candles). It adds an *absorption* entry (aggressive volume into the level while price holds, stop just behind the absorption extreme), breakeven, trailing stop, partial exit, a *flow exit* when the level is being eaten, a *flip* into the breakout when the bounce fails, a daily loss limit, and a money view with risk per trade and the leverage it needs. Research: [`docs/research/bounce.md`](docs/research/bounce.md).
+- **Order-book densities (research):** Bybit XAUUSDT book (200 levels) and tape since 2026-03-09 are replayed to test the bounce off a large resting order with a cascade of limits. Gross edge exists, Bybit fees erase it. Research: [`docs/research/density.md`](docs/research/density.md).
 - **Strategies:** Breakout, Liquidity Sweep and DATA are still stubs.
 
 ## Connecting
@@ -34,7 +35,7 @@ crates/aegis-core/     Rust: market types, Binance / Bybit / MT5 connectors and 
                        bounce/ (levels, touch metrics, probability model, backtest)
 app/src-tauri/         Rust: Tauri 2 window, commands, live feed
 app/ui/                window UI (plain HTML/JS, Vespera styles, TradingView Lightweight Charts)
-python/aegis_lab/      Python: MT5 bridge, Binance archive downloader, research scripts
+python/aegis_lab/      Python: MT5 bridge, Binance and Bybit archive downloaders, research scripts
 scripts/mock_venues.py local Binance/Bybit stand-in for development and tests
 ```
 
