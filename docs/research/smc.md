@@ -54,3 +54,40 @@ grid entry must report results the same way.
   the CHoCH instead of market) and RoboForex costs; more history as it accumulates.
 - "Auto" mode (walk-forward re-tuning) must only trade settings that were positive on data they
   were not tuned on; with this result it would stay flat most of the time, which is correct.
+
+## Wide search (`smc_search.py`)
+
+```bash
+python -m aegis_lab.research.smc_search --samples 6000
+```
+
+Added: order block + FVG confluence, sweep → order block, a liquidity target (the other side's
+range extreme of the last 24 bars), a **limit entry on the retest after the 1m CHoCH** (maker
+instead of market), breakeven and a trailing stop in R, one trade per direction per minute.
+6 000 random settings; 1 860 with ≥ 30 trades in sample and ≥ 15 out of sample.
+
+- **Split:** 20 of 1 860 are net-positive in both halves (1%). The 20 best in sample average
+  **−0.24 R** out of sample (3/20 positive). Median out of sample: gross −0.10 R, net −0.38 R.
+  The CHoCH retest limit is not better than the market CHoCH (−0.42 vs −0.48 R).
+- **"Auto" (walk-forward):** every month trade the setting that was best over the previous 3
+  months: 240 trades, **−74 R (−0.31 R per trade)**; 5 of 6 months negative.
+
+### Simulator check on a random walk
+
+Every engine is now also run on a synthetic random walk with gold's minute volatility, where
+any result above −fees is a bug. The first version of `smc_search` showed +0.3…+0.6 R there: a
+trailing stop moved on a bar's high was filled at the stop price even when the next bar opened
+below it. Fixed (the exit is at the worse of the stop and the open; R uses the initial stop);
+the random walk now gives +0.03…+0.06 R gross, −0.2 R net. With the bug, "order block + FVG,
+grid, trailing" looked like +0.24 R in both halves and beat random zones.
+`smc.py` passes the same check (gross −0.3…+0.2 R on the random walk for the CHoCH entry with
+~100 trades): that spread is also why the order block + CHoCH lead above is within noise.
+
+### Conclusion
+
+On XAUUSDT 1m/1h/4h (Jan-Sep 2026, Binance fees) mechanical SMC in every combination tested
+(zones, confluences, filters, three entries, targets, trailing) does not beat random zones after
+fees, and automatic re-tuning loses. Tuning more settings on the same 9 months will only find
+curve fits. What could change the answer: much cheaper execution (RoboForex spread/commission),
+more history (XAUUSD CFD from Dukascopy goes back years: `aegis_lab.data.dukascopy`), or a
+discretionary element the rules above miss.
