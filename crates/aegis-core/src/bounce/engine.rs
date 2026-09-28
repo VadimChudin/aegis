@@ -729,7 +729,7 @@ impl Engine {
             return base;
         }
         format!(
-            "{base}|s|{}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{:.3}|{:.3}",
+            "{base}|s|{}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.1}|{}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{:.3}|{:.3}",
             p.absorb,
             p.abs_window,
             p.abs_vol,
@@ -737,6 +737,9 @@ impl Engine {
             p.abs_confirm_atr,
             p.abs_stop_atr,
             p.abs_wait,
+            p.abs_limit,
+            p.abs_limit_atr,
+            p.dens_eat,
             p.be_r,
             p.trail_atr,
             p.trail_from_r,
@@ -1129,6 +1132,42 @@ mod tests {
             sl_atr: 0.5,
             tp_r: 1.0,
             ..Params::default()
+        }
+    }
+
+    /// Every setting the simulation reads must be in the cache key, or changing it reuses the
+    /// outcomes of the previous value (the GA and the trade selection would not see it).
+    #[test]
+    fn every_simulated_setting_is_in_the_cache_key() {
+        // Applied after the simulation (selection, money view) or by a new level scan.
+        let after = |id: &str| {
+            id.starts_with("kinds.")
+                || id.starts_with("sessions.")
+                || id.starts_with("scan.")
+                || matches!(
+                    id,
+                    "long"
+                        | "short"
+                        | "use_model"
+                        | "min_prob"
+                        | "max_open"
+                        | "day_stop_r"
+                        | "risk_pct"
+                        | "max_leverage"
+                )
+        };
+        let base = Params {
+            sec_engine: true,
+            ..Params::default()
+        };
+        for s in super::super::param_specs() {
+            if s.kind == "filter" || after(&s.id) {
+                continue;
+            }
+            let mut p = base.clone();
+            let v = p.get(&s.id).unwrap();
+            p.set(&s.id, if (v - s.hi).abs() > 1e-9 { s.hi } else { s.lo });
+            assert_ne!(Engine::key(&p), Engine::key(&base), "{} is not in the cache key", s.id);
         }
     }
 

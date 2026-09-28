@@ -120,6 +120,8 @@ pub fn genes(spec: &GaSpec) -> Vec<Gene> {
             "max_open" => (1.0, 8.0),
             _ => (s.lo, s.hi),
         };
+        // Never outside the slider: the window could not show or keep the value.
+        let (lo, hi) = (lo.max(s.lo), hi.min(s.hi));
         g.push(Gene {
             id: s.id.clone(),
             lo,
@@ -567,6 +569,7 @@ pub fn optimize(engine: &Engine, base: &Params, spec: &GaSpec, progress: &(dyn F
     let genes: Vec<Gene> = genes(spec)
         .into_iter()
         .filter(|g| base.sec_engine || !super::params::sec_only(&g.id))
+        .filter(|g| base.use_model || g.id != "min_prob")
         .collect();
     let o = Objective {
         target_win_rate: spec.target_win_rate,
@@ -752,6 +755,43 @@ mod tests {
             }
             let s = g.snap(m);
             assert!((((s - g.lo) / g.step).round() * g.step + g.lo - s).abs() < 1e-9);
+        }
+    }
+
+    /// Every gene is a real setting, every tunable setting has a gene, and no gene can leave the
+    /// slider range.
+    #[test]
+    fn genes_cover_tunable_settings_within_slider_bounds() {
+        let specs = param_specs();
+        let gs = genes(&GaSpec::default());
+        for s in specs.iter().filter(|s| s.tunable && s.kind != "filter") {
+            assert!(gs.iter().any(|g| g.id == s.id), "no gene for {}", s.id);
+        }
+        for g in &gs {
+            let (lo, hi) = match specs.iter().find(|s| s.id == g.id) {
+                Some(s) => (s.lo, s.hi),
+                None => {
+                    let (m, part) = g.id.trim_start_matches("filters.").rsplit_once('.').unwrap();
+                    let f = &FEATURES[index(m).unwrap_or_else(|| panic!("unknown gene {}", g.id))];
+                    if part == "on" {
+                        (0.0, 1.0)
+                    } else {
+                        (f.lo, f.hi)
+                    }
+                }
+            };
+            assert!(
+                g.lo >= lo - 1e-9 && g.hi <= hi + 1e-9 && g.lo < g.hi,
+                "{}: {}..{} outside {lo}..{hi}",
+                g.id,
+                g.lo,
+                g.hi
+            );
+            for v in [g.lo - 1.0, g.hi + 1.0] {
+                let p = apply(&Params::default(), std::slice::from_ref(g), &[g.snap(v)]);
+                let got = p.get(&g.id).unwrap();
+                assert!(got >= lo - 1e-9 && got <= hi + 1e-9, "{} = {got}", g.id);
+            }
         }
     }
 

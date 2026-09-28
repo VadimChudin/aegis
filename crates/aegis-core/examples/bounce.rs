@@ -253,7 +253,13 @@ fn main() {
             };
             let fp = |e: &Engine, p: &Params| {
                 let r = e.report(p);
-                (r.stats.trades, (r.stats.total_r * 1e4).round() as i64, r.signals.len())
+                // The money view too: risk % and max leverage change only the account growth.
+                (
+                    r.stats.trades,
+                    (r.stats.total_r * 1e4).round() as i64,
+                    r.signals.len(),
+                    (r.money.return_pct * 1e4).round() as i64,
+                )
             };
             let k0 = engine_for(&mut engines, &base);
             let f0 = fp(&engines[&k0], &base);
