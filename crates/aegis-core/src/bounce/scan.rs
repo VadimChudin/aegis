@@ -25,9 +25,19 @@ pub enum LevelKind {
     Round,
     /// Previous day's point of control (price with the most volume).
     Poc,
+    Swing15,
+    Swing4h,
+    /// Daily swing high / low (from daily bars).
+    Swing1d,
+    /// Previous month high / low.
+    Month,
+    /// Equal highs / lows: a second 5m swing at the price of an earlier one (resting stops).
+    Equal,
+    /// Edge of a fair value gap (3-bar imbalance) of at least 0.3 ATR.
+    Fvg,
 }
 
-pub const KINDS: [LevelKind; 7] = [
+pub const KINDS: [LevelKind; 13] = [
     LevelKind::Swing5,
     LevelKind::Swing1h,
     LevelKind::Day,
@@ -35,10 +45,24 @@ pub const KINDS: [LevelKind; 7] = [
     LevelKind::Session,
     LevelKind::Round,
     LevelKind::Poc,
+    LevelKind::Swing15,
+    LevelKind::Swing4h,
+    LevelKind::Swing1d,
+    LevelKind::Month,
+    LevelKind::Equal,
+    LevelKind::Fvg,
+];
+
+/// Level kinds a swing aggregator produces, with their bar length in seconds.
+const SWING_TFS: [(i64, LevelKind); 4] = [
+    (900, LevelKind::Swing15),
+    (3_600, LevelKind::Swing1h),
+    (14_400, LevelKind::Swing4h),
+    (86_400, LevelKind::Swing1d),
 ];
 
 impl LevelKind {
-    pub fn bit(self) -> u8 {
+    pub fn bit(self) -> u16 {
         1 << KINDS.iter().position(|k| *k == self).unwrap_or(0)
     }
 
@@ -51,6 +75,12 @@ impl LevelKind {
             LevelKind::Session => "session",
             LevelKind::Round => "round",
             LevelKind::Poc => "poc",
+            LevelKind::Swing15 => "swing15",
+            LevelKind::Swing4h => "swing4h",
+            LevelKind::Swing1d => "swing1d",
+            LevelKind::Month => "month",
+            LevelKind::Equal => "equal",
+            LevelKind::Fvg => "fvg",
         }
     }
 
@@ -63,6 +93,12 @@ impl LevelKind {
             LevelKind::Session => "Session high/low",
             LevelKind::Round => "Round price",
             LevelKind::Poc => "Previous day POC",
+            LevelKind::Swing15 => "Swing 15m",
+            LevelKind::Swing4h => "Swing 4h",
+            LevelKind::Swing1d => "Swing 1d",
+            LevelKind::Month => "Previous month high/low",
+            LevelKind::Equal => "Equal highs/lows",
+            LevelKind::Fvg => "Fair value gap edge",
         }
     }
 }
@@ -78,6 +114,10 @@ pub struct ScanConfig {
     pub round_step: f64,
     /// Levels older than this (bars) are dropped. Round levels never expire.
     pub max_age: usize,
+    /// Control experiment: every level is moved by ±(0.5…1.5)·`control_shift`·ATR to a price
+    /// with no meaning. 0 = off. If the edge is real, it must disappear with shifted levels.
+    #[serde(default)]
+    pub control_shift: f64,
 }
 
 impl Default for ScanConfig {
@@ -88,6 +128,7 @@ impl Default for ScanConfig {
             swing_n: 5,
             round_step: 10.0,
             max_age: 7 * 288,
+            control_shift: 0.0,
         }
     }
 }
@@ -101,7 +142,7 @@ pub struct Touch {
     pub dir: i8,
     pub level: f64,
     /// Bitmask of `LevelKind::bit()` for all levels in the zone.
-    pub kinds: u8,
+    pub kinds: u16,
     pub atr: f64,
     /// Fill price of a limit order resting at the edge of the touch zone.
     pub fill: f64,
@@ -115,7 +156,8 @@ pub struct Touch {
 
 struct Ctx<'a> {
     level: &'a Level,
-    kinds: u8,
+    calendar: &'a [super::news::Event],
+    kinds: u16,
     d: f64,
     p: f64,
     atr: f64,
@@ -124,7 +166,7 @@ struct Ctx<'a> {
 
 struct Level {
     price: f64,
-    kinds: u8,
+    kinds: u16,
     born: usize,
     touches: u32,
     crosses: u32,
@@ -277,14 +319,42 @@ fn indicators(bars: &[Bar]) -> Ind {
 
 struct Levels {
     list: Vec<Level>,
+    /// Control shift in $ (0 = off), see `ScanConfig::control_shift`.
+    shift: f64,
+}
+
+/// Deterministic pseudo-random number in [0, 1) from a price and a salt.
+fn hash01(x: f64, salt: u64) -> f64 {
+    let mut h = x.to_bits() ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    h ^= h >> 33;
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 impl Levels {
+    /// Where a level at `price` really goes (moved in control mode).
+    fn place(&self, price: f64, kind: LevelKind) -> f64 {
+        if self.shift <= 0.0 {
+            return price;
+        }
+        let u = hash01(price, kind as u64 + 1);
+        let mag = 0.5 + hash01(price, kind as u64 + 101);
+        price + if u < 0.5 { -mag } else { mag } * self.shift
+    }
+
     fn add(&mut self, price: f64, kind: LevelKind, born: usize, atr: f64, close: f64, away: f64) {
         if !price.is_finite() {
             return;
         }
+        let price = self.place(price, kind);
         if let Some(l) = self.list.iter_mut().find(|l| (l.price - price).abs() <= 0.15 * atr) {
+            // A new 5m swing at an older 5m swing's price: equal highs/lows.
+            if kind == LevelKind::Swing5 && l.kinds & LevelKind::Swing5.bit() != 0 && born > l.born + 12 {
+                l.kinds |= LevelKind::Equal.bit();
+            }
             l.kinds |= kind.bit();
             return;
         }
@@ -311,14 +381,26 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
         return (Vec::new(), Vec::new());
     }
     let ind = indicators(bars);
-    let mut lv = Levels { list: Vec::new() };
+    let shift = if cfg.control_shift > 0.0 {
+        let mut a: Vec<f64> = ind.atr.iter().copied().filter(|x| x.is_finite()).collect();
+        a.sort_by(f64::total_cmp);
+        cfg.control_shift * a.get(a.len() / 2).copied().unwrap_or(1.0)
+    } else {
+        0.0
+    };
+    let mut lv = Levels {
+        list: Vec::new(),
+        shift,
+    };
+    let calendar = super::news::calendar();
     let mut touches = Vec::new();
 
     let mut day = Period::default();
     let mut week = Period::default();
     let mut sess = Period::default();
-    let mut hour = Period::default();
-    let mut hours: Vec<Period> = Vec::new();
+    let mut month = Period::default();
+    // Swing aggregators: (current bar, finished bars) per timeframe in SWING_TFS.
+    let mut agg: Vec<(Period, Vec<Period>)> = SWING_TFS.iter().map(|_| (Period::default(), Vec::new())).collect();
     let mut day_ranges: Vec<f64> = Vec::new();
     let mut day_profile: std::collections::HashMap<i64, f64> = Default::default();
     let (mut vwap_pv, mut vwap_v) = (0.0, 0.0);
@@ -361,17 +443,28 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
                 }
                 sess = Period::default();
             }
-            if ph != chh && hour.started {
-                hours.push(std::mem::take(&mut hour));
-                let k = hours.len();
-                if k >= 5 {
-                    let mid = &hours[k - 3];
-                    let w = &hours[k - 5..];
-                    if w.iter().all(|h| h.high <= mid.high) {
-                        lv.add(mid.high, LevelKind::Swing1h, i, atr, close_prev, cfg.away_atr);
+            if super::backtest_month(pt) != super::backtest_month(b.time) && month.started {
+                lv.add(month.high, LevelKind::Month, i, atr, close_prev, cfg.away_atr);
+                lv.add(month.low, LevelKind::Month, i, atr, close_prev, cfg.away_atr);
+                month = Period::default();
+            }
+            // Swings of higher timeframes: the middle of the last 5 finished bars.
+            for (k, &(secs, kind)) in SWING_TFS.iter().enumerate() {
+                let (cur, done) = &mut agg[k];
+                if pt.div_euclid(secs) != b.time.div_euclid(secs) && cur.started {
+                    done.push(std::mem::take(cur));
+                    if done.len() > 5 {
+                        done.remove(0);
                     }
-                    if w.iter().all(|h| h.low >= mid.low) {
-                        lv.add(mid.low, LevelKind::Swing1h, i, atr, close_prev, cfg.away_atr);
+                    if done.len() == 5 {
+                        let mid = &done[2];
+                        let (hi, lo) = (mid.high, mid.low);
+                        if done.iter().all(|h| h.high <= hi) {
+                            lv.add(hi, kind, i, atr, close_prev, cfg.away_atr);
+                        }
+                        if done.iter().all(|h| h.low >= lo) {
+                            lv.add(lo, kind, i, atr, close_prev, cfg.away_atr);
+                        }
                     }
                 }
             }
@@ -382,14 +475,21 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
             let hi = ((b.high + 5.0 * atr) / cfg.round_step).ceil() as i64;
             if hi - lo < 200 {
                 for k in lo..=hi {
-                    let p = k as f64 * cfg.round_step;
+                    let p = lv.place(k as f64 * cfg.round_step, LevelKind::Round);
                     let exists = lv
                         .list
                         .iter_mut()
                         .find(|l| (l.price - p).abs() < 1e-9 || (l.price - p).abs() <= 0.15 * atr);
                     match exists {
                         Some(l) => l.kinds |= LevelKind::Round.bit(),
-                        None => lv.add(p, LevelKind::Round, 0, atr, close_prev, cfg.away_atr),
+                        None => lv.add(
+                            k as f64 * cfg.round_step,
+                            LevelKind::Round,
+                            0,
+                            atr,
+                            close_prev,
+                            cfg.away_atr,
+                        ),
                     }
                 }
             }
@@ -401,7 +501,7 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
             for dir in [1i8, -1] {
                 let d = dir as f64;
                 let mut best: Option<usize> = None;
-                let mut kinds = 0u8;
+                let mut kinds = 0u16;
                 for (k, l) in lv.list.iter().enumerate() {
                     if !l.armed {
                         continue;
@@ -414,8 +514,10 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
                     if !hit {
                         continue;
                     }
-                    let ext = if dir > 0 { b.low } else { b.high };
-                    if best.is_none_or(|j| (ext - l.price).abs() < (ext - lv.list[j].price).abs()) {
+                    // The first level price reaches from the previous close: that is where a
+                    // resting limit fills. Picking the level nearest the bar's extreme would use
+                    // the bar's low/high, i.e. know in advance where price turned (look-ahead).
+                    if best.is_none_or(|j| d * (l.price - lv.list[j].price) > 0.0) {
                         best = Some(k);
                     }
                 }
@@ -449,6 +551,7 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
                     };
                     let ctx = Ctx {
                         level: &lv.list[k],
+                        calendar,
                         kinds,
                         d,
                         p,
@@ -522,10 +625,22 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
                 lv.add(bars[m].low, LevelKind::Swing5, i + 1, atr_now, b.close, cfg.away_atr);
             }
         }
+        if i >= 2 {
+            let (a, atr_now) = (&bars[i - 2], ind.atr[i]);
+            if b.low - a.high >= 0.3 * atr_now {
+                lv.add(a.high, LevelKind::Fvg, i + 1, atr_now, b.close, cfg.away_atr);
+            }
+            if a.low - b.high >= 0.3 * atr_now {
+                lv.add(a.low, LevelKind::Fvg, i + 1, atr_now, b.close, cfg.away_atr);
+            }
+        }
         day.add(&b);
         week.add(&b);
         sess.add(&b);
-        hour.add(&b);
+        month.add(&b);
+        for (cur, _) in agg.iter_mut() {
+            cur.add(&b);
+        }
         let px = if b.poc.is_finite() { b.poc } else { b.close };
         *day_profile.entry(px.round() as i64).or_insert(0.0) += b.volume;
         vwap_pv += (b.high + b.low + b.close) / 3.0 * b.volume;
@@ -553,7 +668,7 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
             .list
             .iter()
             .filter(|o| (o.price - l.price).abs() <= 2.0 * zone.max(0.05 * atr))
-            .fold(0u8, |m, o| m | o.kinds);
+            .fold(0u16, |m, o| m | o.kinds);
         let room = lv
             .list
             .iter()
@@ -562,6 +677,7 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
             .fold(f64::INFINITY, f64::min);
         let ctx = Ctx {
             level: l,
+            calendar,
             kinds,
             d,
             p: l.price,
@@ -588,6 +704,7 @@ pub fn scan_full(bars: &[Bar], cfg: &ScanConfig) -> (Vec<Touch>, Vec<Touch>) {
 fn features(bars: &[Bar], ind: &Ind, i: usize, ctx: &Ctx, room: f64, day_hi: f64, day_lo: f64, vwap: f64) -> [f64; NF] {
     let Ctx {
         level,
+        calendar,
         kinds,
         d,
         p,
@@ -721,6 +838,11 @@ fn features(bars: &[Bar], ind: &Ind, i: usize, ctx: &Ctx, room: f64, day_hi: f64
     set(F::Hour, close_t.div_euclid(3600).rem_euclid(24) as f64);
     set(F::Weekday, (close_t.div_euclid(86_400) + 3).rem_euclid(7) as f64);
     set(F::Spread, ratio(range / b.trades.max(1.0), atr));
+    let (before, after) = super::news::distance(calendar, close_t);
+    set(F::NewsBefore, before);
+    set(F::NewsAfter, after);
+    set(F::SpreadUsd, b.spread);
+    set(F::Funding, b.funding * 1e4);
     f
 }
 
@@ -738,6 +860,25 @@ mod tests {
                 b
             })
             .collect()
+    }
+
+    /// A bar falling through two support levels fills the upper one first. Choosing the level
+    /// nearest the bar's low would use where price turned, which is not known in advance.
+    #[test]
+    fn a_falling_bar_touches_the_first_level_it_reaches() {
+        let mut bars: Vec<Bar> = (0..200)
+            .map(|i| Bar::ohlcv(i as i64 * 300, 2030.0, 2031.0, 2029.0, 2030.0, 1.0))
+            .collect();
+        // Round levels every $10: 2020 and 2010 below price. Bar 150 drops to 2009.9.
+        bars[150] = Bar::ohlcv(150 * 300, 2030.0, 2030.0, 2009.9, 2012.0, 1.0);
+        let cfg = ScanConfig {
+            away_atr: 0.5,
+            ..ScanConfig::default()
+        };
+        let t = scan(&bars, &cfg);
+        let hit: Vec<_> = t.iter().filter(|x| x.i == 150 && x.dir == 1).collect();
+        assert_eq!(hit.len(), 1);
+        assert!((hit[0].level - 2020.0).abs() < 1e-9, "level {}", hit[0].level);
     }
 
     #[test]

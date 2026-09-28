@@ -4,6 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const tauri = window.__TAURI__;
   const invoke = (cmd, args) => tauri.core.invoke(cmd, args);
+  const t = (str, vars) => window.I18N.t(str, vars);
   const THEMES = [
     ["glass-dark", "Glass dark"],
     ["glass-light", "Glass light"],
@@ -133,7 +134,7 @@
     const tf = S.chart.tf;
     clearChart();
     renderChartChrome();
-    setLamp("busy", "Loading…");
+    setLamp("busy", t("Loading…"));
     try {
       const data = await invoke("load_chart", { broker, timeframe: tf });
       if (broker !== S.chart.broker || tf !== S.chart.tf) return;
@@ -145,7 +146,7 @@
       S.chart.lastTime = last ? last.time : 0;
       chart.timeScale().setVisibleLogicalRange({ from: data.candles.length - 160, to: data.candles.length + 6 });
       showLast(last);
-      setLamp("ok", `Live · ${S.infos[broker].name}`);
+      setLamp("ok", `${t("Live")} · ${S.infos[broker].name}`);
       window.AEGIS.bounce?.onLiveChart();
     } catch (err) {
       if (String(err) === "superseded") return;
@@ -159,7 +160,7 @@
     S.chart.generation = -1;
     await invoke("stop_chart");
     clearChart();
-    setLamp("off", "Offline");
+    setLamp("off", t("Offline"));
     renderChartChrome();
   }
 
@@ -235,13 +236,13 @@
   // ---- header, dock, rail -------------------------------------------------------
 
   function brokerState(id) {
-    if (S.busy[id]) return ["busy", "Connecting…"];
+    if (S.busy[id]) return ["busy", t("Connecting…")];
     const r = S.reports[id];
-    if (S.sessions[id]) return r && !r.ready ? ["warn", "Connected · check"] : ["on", "Connected"];
-    if (r && !r.connected) return ["err", "Failed"];
+    if (S.sessions[id]) return r && !r.ready ? ["warn", t("Connected · check")] : ["on", t("Connected")];
+    if (r && !r.connected) return ["err", t("Failed")];
     const stored = S.settings?.brokers?.[id];
-    if (stored && (stored.stored.length || Object.keys(stored.values).length)) return ["off", "Saved"];
-    return ["off", "Not connected"];
+    if (stored && (stored.stored.length || Object.keys(stored.values).length)) return ["off", t("Saved")];
+    return ["off", t("Not connected")];
   }
 
   function renderChartChrome() {
@@ -251,7 +252,7 @@
       buildSelect("brokerSel", opts, S.chart.broker, (v) => {
         S.chart.wanted = v;
         loadChart(v);
-      }, { disabled: !opts.length, placeholder: "No broker" }),
+      }, { disabled: !opts.length, placeholder: t("No broker") }),
     );
     const tfs = S.timeframes.map((tf) => ({ value: tf, label: tf }));
     $("hdrTf").replaceChildren(
@@ -280,7 +281,7 @@
     const info = b && S.infos[b];
     const session = b && S.sessions[b];
     $("legendSym").textContent = session ? session.symbol : "XAU";
-    $("legendMeta").textContent = info ? `${info.name} · ${S.chart.tf}` : "No broker";
+    $("legendMeta").textContent = info ? `${info.name} · ${S.chart.tf}` : t("No broker");
     $("statBrokers").textContent = `${connected.length} / ${S.order.length}`;
     $("statChart").textContent = info ? `${info.name} · ${session.symbol}` : "—";
     $("btnBrokers").hidden = connected.length > 0;
@@ -289,10 +290,10 @@
     $("empty").hidden = !empty;
     if (empty) {
       const busy = S.order.some((id) => S.busy[id]);
-      $("emptyTitle").textContent = busy ? "Connecting…" : "No broker connected";
+      $("emptyTitle").textContent = t(busy ? "Connecting…" : "No broker connected");
       $("emptyText").textContent = busy
-        ? "Checking the saved brokers."
-        : "AEGIS shows gold only from a broker you are connected to: Binance, Bybit or RoboForex.";
+        ? t("Checking the saved brokers.")
+        : t("AEGIS shows gold only from a broker you are connected to: Binance, Bybit or RoboForex.");
       $("emptyConnect").hidden = busy;
       $("emptyIcons").innerHTML = S.order.map((id) => `<img src="${esc(S.infos[id].icon)}" alt="">`).join("");
     }
@@ -306,9 +307,9 @@
         const ready = s.status !== "stub";
         chip.className = `strategy-chip${ready ? "" : " soon"}`;
         chip.dataset.strategy = s.id;
-        chip.title = ready ? s.summary : `${s.summary} Coming in a later version.`;
-        chip.innerHTML = ready ? `<span></span><span class="v-opt-tag">backtest</span>` : `<span></span><span class="v-opt-tag">soon</span>`;
-        chip.firstChild.textContent = s.name;
+        chip.title = ready ? t(s.summary) : `${t(s.summary)} ${t("Coming in a later version.")}`;
+        chip.innerHTML = `<span></span><span class="v-opt-tag">${esc(t(ready ? "backtest" : "soon"))}</span>`;
+        chip.firstChild.textContent = t(s.name);
         if (ready) chip.onclick = () => openPanel(s.id);
         return chip;
       }),
@@ -400,6 +401,7 @@
     $("panelBody").replaceChildren();
     document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
+    document.body.classList.remove("panel-open");
     document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("on", b.dataset.panel === "chart"));
   }
 
@@ -407,22 +409,23 @@
     openSheet(false);
     closeMenus();
     S.panel = kind;
+    document.body.classList.add("panel-open");
     $("panel").hidden = false;
     $("backdrop").hidden = false;
     document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("on", b.dataset.panel === kind));
     if (kind === "brokers") {
-      $("panelTitle").textContent = "Brokers";
+      $("panelTitle").textContent = t("Brokers");
       $("panel").classList.add("wide");
       const firstOff = S.order.find((id) => !S.sessions[id]) || S.order[0];
       S.openCard = focus || S.openCard || firstOff;
       renderBrokersPanel();
     } else if (kind === "bounce" && window.AEGIS.bounce) {
-      $("panelTitle").textContent = "Bounce";
+      $("panelTitle").textContent = t("Bounce");
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.bounce.render($("panelBody"));
     } else if (kind === "theme") {
-      $("panelTitle").textContent = "Theme";
+      $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
       renderThemePanel();
     }
@@ -433,13 +436,13 @@
   function checksHtml(r, connected) {
     if (!r) return "";
     const warns = r.checks.filter((c) => c.status === "warn").length;
-    const note = warns ? ` · ${warns} warning${warns > 1 ? "s" : ""}` : "";
-    const head = r.ready ? `Ready${note}` : r.connected ? "Connected, see the checks" : connected ? "Reconnect failed · previous connection still active" : "Not connected";
+    const note = warns ? ` · ${t(warns > 1 ? "{n} warnings" : "{n} warning", { n: warns })}` : "";
+    const head = r.ready ? `${t("Ready")}${note}` : r.connected ? t("Connected, see the checks") : t(connected ? "Reconnect failed · previous connection still active" : "Not connected");
     const when = r.at ? new Date(r.at).toLocaleString() : "";
     const rows = r.checks
       .map(
         (c) => `<div class="chk chk-${esc(c.status)}"><span class="chk-ico">${ICON[c.status] || ""}</span><div>
-          <div>${esc(c.label)}</div>${c.detail ? `<div class="hint">${esc(c.detail)}</div>` : ""}</div></div>`,
+          <div>${esc(t(c.label))}</div>${c.detail ? `<div class="hint">${esc(t(c.detail))}</div>` : ""}</div></div>`,
       )
       .join("");
     return `<div class="chk-head" data-ready="${r.ready ? "1" : "0"}">${esc(head)}<span class="hint">${esc(when)}</span></div>${rows}`;
@@ -460,7 +463,7 @@
         focused = [card.dataset.broker, document.activeElement.dataset.key];
       }
     });
-    const intro = `<p class="hint">Connect one or more brokers; they stay connected together. The chart shows gold from the broker picked in the header. Credentials are stored encrypted on this computer, and secrets are never shown again.</p>`;
+    const intro = `<p class="hint">${esc(t("Connect one or more brokers; they stay connected together. The chart shows gold from the broker picked in the header. Credentials are stored encrypted on this computer, and secrets are never shown again."))}</p>`;
     body.innerHTML = intro + S.order.map(cardHtml).join("");
     body.querySelectorAll(".broker-card").forEach((card) => {
       const draft = drafts.get(card.dataset.broker);
@@ -489,10 +492,10 @@
       .map((f, i) => {
         const stored = f.secret && saved.stored.includes(f.key);
         const value = f.secret ? "" : saved.values[f.key] || "";
-        const ph = stored ? "Stored · leave empty to keep" : f.placeholder || "";
+        const ph = stored ? t("Stored · leave empty to keep") : f.placeholder || "";
         const input = `<input data-key="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />`;
         const row = i === 0 ? `<div class="api-row"><img class="api-mark" src="${esc(info.icon)}" alt="">${input}</div>` : input;
-        return `<div class="field"><label>${esc(f.label)}${f.optional ? " (optional)" : ""}</label>${row}<p class="hint">${esc(f.hint)}</p></div>`;
+        return `<div class="field"><label>${esc(t(f.label))}${f.optional ? ` (${esc(t("optional"))})` : ""}</label>${row}<p class="hint">${esc(t(f.hint))}</p></div>`;
       })
       .join("");
     const connected = !!S.sessions[id];
@@ -509,17 +512,17 @@
           <span class="chev">▾</span>
         </button>
         <div class="broker-body">
-          <div class="req-title">Requirements</div>
-          <ul class="req-list">${info.requirements.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+          <div class="req-title">${esc(t("Requirements"))}</div>
+          <ul class="req-list">${info.requirements.map((r) => `<li>${esc(t(r))}</li>`).join("")}</ul>
           <div class="keys-url">${esc(info.keys_url)}</div>
-          ${saved.unreadable ? `<p class="hint warn">Saved credentials could not be decrypted on this computer. Enter them again.</p>` : ""}
+          ${saved.unreadable ? `<p class="hint warn">${esc(t("Saved credentials could not be decrypted on this computer. Enter them again."))}</p>` : ""}
           ${fields}
-          <div class="field toggle-row"><span class="field-label">Connect on start</span>
-            <button type="button" class="toggle${auto ? " on" : ""}" aria-label="Connect on start"><span class="knob"></span></button></div>
+          <div class="field toggle-row"><span class="field-label">${esc(t("Connect on start"))}</span>
+            <button type="button" class="toggle${auto ? " on" : ""}" aria-label="${esc(t("Connect on start"))}"><span class="knob"></span></button></div>
           <div class="btn-row">
-            <button type="button" class="ok act-connect" ${S.busy[id] ? "disabled" : ""}>${S.busy[id] ? "Connecting…" : connected ? "Reconnect" : "Connect"}</button>
-            ${connected ? `<button type="button" class="ghost act-disconnect">Disconnect</button>` : ""}
-            ${hasSaved ? `<button type="button" class="ghost danger act-forget">Forget</button>` : ""}
+            <button type="button" class="ok act-connect" ${S.busy[id] ? "disabled" : ""}>${esc(t(S.busy[id] ? "Connecting…" : connected ? "Reconnect" : "Connect"))}</button>
+            ${connected ? `<button type="button" class="ghost act-disconnect">${esc(t("Disconnect"))}</button>` : ""}
+            ${hasSaved ? `<button type="button" class="ghost danger act-forget">${esc(t("Forget"))}</button>` : ""}
           </div>
           <div class="checks">${checksHtml(report, connected)}</div>
         </div>
@@ -551,10 +554,10 @@
       f.onclick = () => {
         if (f.dataset.armed) return disconnect(id, true);
         f.dataset.armed = "1";
-        f.textContent = "Click again to forget";
+        f.textContent = t("Click again to forget");
         setTimeout(() => {
           delete f.dataset.armed;
-          f.textContent = "Forget";
+          f.textContent = t("Forget");
         }, 3000);
       };
     }
@@ -562,10 +565,14 @@
 
   function renderThemePanel() {
     const current = S.settings.theme;
-    $("panelBody").innerHTML = `<div class="field"><label>Theme</label></div><div class="theme-grid" id="themeGrid">${THEMES.map(
+    const lang = window.I18N.lang;
+    $("panelBody").innerHTML = `<div class="field"><label>${esc(t("Language"))}</label></div><div class="lang-row" id="langRow">${window.I18N.LANGS.map(
+      ([id, name]) => `<button type="button" class="ghost sm${id === lang ? " on" : ""}" data-lang="${id}">${esc(name)}</button>`,
+    ).join("")}</div>
+      <div class="field"><label>${esc(t("Theme"))}</label></div><div class="theme-grid" id="themeGrid">${THEMES.map(
       ([id, name]) => `<button type="button" class="theme-card${id === current ? " on" : ""}" data-theme="${id}">
-        <span class="theme-swatch" data-swatch="${id}"><i></i><i></i><i></i></span><span class="theme-name">${name}</span></button>`,
-    ).join("")}</div><p class="hint">AEGIS v${esc(S.version)} · settings are stored on this computer.</p>`;
+        <span class="theme-swatch" data-swatch="${id}"><i></i><i></i><i></i></span><span class="theme-name">${esc(t(name))}</span></button>`,
+    ).join("")}</div><p class="hint">AEGIS v${esc(S.version)} · ${esc(t("settings are stored on this computer."))}</p>`;
     $("themeGrid").querySelectorAll(".theme-card").forEach((b) => {
       b.onclick = async () => {
         S.settings.theme = b.dataset.theme;
@@ -574,6 +581,25 @@
         await invoke("set_theme", { theme: b.dataset.theme });
       };
     });
+    $("langRow").querySelectorAll("[data-lang]").forEach((b) => {
+      b.onclick = async () => {
+        await setLang(b.dataset.lang, true);
+        renderThemePanel();
+      };
+    });
+  }
+
+  /** Switches the interface language and redraws everything that holds text. */
+  async function setLang(lang, persist) {
+    window.I18N.set(lang);
+    S.settings.lang = window.I18N.lang;
+    if (persist) await invoke("set_lang", { lang: window.I18N.lang });
+    renderStrategies(S.strategies || []);
+    renderChartChrome();
+    if (S.panel === "brokers") renderBrokersPanel();
+    if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
+    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
+    if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
   }
 
   // ---- live feed ----------------------------------------------------------------
@@ -612,7 +638,7 @@
     setLamp,
     closePanel,
     renderChartChrome,
-    reloadLive: () => (S.chart.broker ? loadChart(S.chart.broker) : (clearChart(), setLamp("off", "Offline"), renderChartChrome())),
+    reloadLive: () => (S.chart.broker ? loadChart(S.chart.broker) : (clearChart(), setLamp("off", t("Offline")), renderChartChrome())),
   };
 
   // ---- boot ---------------------------------------------------------------------
@@ -635,6 +661,8 @@
     S.chart.tf = b.settings.timeframe || "15m";
     S.chart.wanted = b.settings.chart_broker;
     applyTheme(b.settings.theme);
+    S.strategies = b.strategies;
+    window.I18N.set(b.settings.lang || window.I18N.detect());
     renderStrategies(b.strategies);
     listenFeed();
 
@@ -666,7 +694,7 @@
     });
     saved.forEach((id) => (S.busy[id] = true));
     renderChartChrome();
-    log(`AEGIS ${b.version}${saved.length ? ` · connecting ${saved.map((id) => S.infos[id].name).join(", ")}` : ""}`);
+    log(`AEGIS ${b.version}${saved.length ? ` · ${t("connecting")} ${saved.map((id) => S.infos[id].name).join(", ")}` : ""}`);
     await ensureChart();
     await Promise.all(saved.map(connectSaved));
   }

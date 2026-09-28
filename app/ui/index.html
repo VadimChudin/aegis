@@ -25,8 +25,8 @@
         </div>
         <div class="chrome-right">
           <span class="lamp" id="feedLamp" data-on="0" title="Offline"></span>
-          <button class="cta" id="btnBrokers" type="button">Brokers</button>
-          <button class="ghost-round" id="btnMenu" type="button" title="Menu">
+          <button class="cta" id="btnBrokers" type="button" data-i18n>Brokers</button>
+          <button class="ghost-round" id="btnMenu" type="button" title="Menu" data-i18n-title>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <circle cx="6" cy="12" r="1.6" />
               <circle cx="12" cy="12" r="1.6" />
@@ -39,10 +39,10 @@
       <main class="stage">
         <aside class="rail glass" id="rail">
           <button class="rail-item on" data-panel="chart" type="button"><span class="ico">⌂</span><span>AEGIS</span></button>
-          <button class="rail-item" data-panel="brokers" type="button"><span class="ico">▣</span><span>Brokers</span></button>
-          <button class="rail-item" data-panel="theme" type="button"><span class="ico">⚙</span><span>Settings</span></button>
+          <button class="rail-item" data-panel="brokers" type="button"><span class="ico">▣</span><span data-i18n>Brokers</span></button>
+          <button class="rail-item" data-panel="theme" type="button"><span class="ico">⚙</span><span data-i18n>Settings</span></button>
           <div class="rail-sep"></div>
-          <div class="rail-label">Strategies</div>
+          <div class="rail-label" data-i18n>Strategies</div>
           <div id="strategyList" class="strategy-list"></div>
         </aside>
 
@@ -56,14 +56,14 @@
             <div id="chart"></div>
             <div class="bt-bar" id="btBar" hidden>
               <span id="btBarText">Backtest</span>
-              <button type="button" class="ghost sm" id="btBarLive">Back to live</button>
+              <button type="button" class="ghost sm" id="btBarLive" data-i18n>Back to live</button>
             </div>
             <div class="chart-empty" id="empty">
               <div class="box">
                 <div class="brand-row" id="emptyIcons"></div>
                 <h3 id="emptyTitle">No broker connected</h3>
                 <p id="emptyText">AEGIS shows gold only from a broker you are connected to.</p>
-                <button class="ok" id="emptyConnect" type="button">Connect a broker</button>
+                <button class="ok" id="emptyConnect" type="button" data-i18n>Connect a broker</button>
               </div>
             </div>
           </div>
@@ -71,18 +71,18 @@
       </main>
 
       <footer class="dock glass">
-        <div class="stat"><span>Brokers</span><strong id="statBrokers">0 / 3</strong></div>
-        <div class="stat"><span>Chart</span><strong id="statChart">—</strong></div>
-        <div class="stat"><span>Last</span><strong id="statLast">—</strong></div>
+        <div class="stat"><span data-i18n>Brokers</span><strong id="statBrokers">0 / 3</strong></div>
+        <div class="stat"><span data-i18n>Chart</span><strong id="statChart">—</strong></div>
+        <div class="stat"><span data-i18n>Last</span><strong id="statLast">—</strong></div>
         <div class="log" id="log"></div>
       </footer>
     </div>
 
     <div class="sheet-backdrop" id="backdrop" hidden></div>
     <aside class="sheet glass" id="sheet" hidden>
-      <button class="row" data-open="brokers" type="button"><span>Brokers</span><span class="row-ico">▣</span></button>
-      <button class="row" data-open="theme" type="button"><span>Theme</span><span class="row-ico">▤</span></button>
-      <button class="row danger" id="sheetClose" type="button"><span>Close</span><span class="row-ico">✕</span></button>
+      <button class="row" data-open="brokers" type="button"><span data-i18n>Brokers</span><span class="row-ico">▣</span></button>
+      <button class="row" data-open="theme" type="button"><span data-i18n>Settings</span><span class="row-ico">▤</span></button>
+      <button class="row danger" id="sheetClose" type="button"><span data-i18n>Close</span><span class="row-ico">✕</span></button>
     </aside>
 
     <section class="panel glass" id="panel" hidden>
@@ -94,6 +94,8 @@
     </section>
 
     <script src="vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="i18n.js"></script>
+    <script src="i18n-dict.js"></script>
     <script src="app.js"></script>
     <script src="bounce.js"></script>
   </body>
