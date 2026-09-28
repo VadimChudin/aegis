@@ -2102,3 +2102,116 @@ details.adv[open] > summary {
 .bt-bar #btBarLive {
   white-space: nowrap;
 }
+.bt-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.bt-tab {
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.bt-tab.on {
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  box-shadow: inset 0 0 0 1px var(--chip-edge);
+}
+.bt-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  margin: -4px 0 10px;
+}
+.bt-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.bt-progress {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--fill-strong);
+  overflow: hidden;
+  margin: 8px 0;
+}
+.bt-progress .bar {
+  height: 100%;
+  width: 0;
+  background: var(--apple);
+  transition: width 0.3s ease;
+}
+.bt-input {
+  flex: 1 1 120px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 12px;
+}
+.bt-mine {
+  display: inline-flex;
+  gap: 2px;
+}
+.ghost.sm.x {
+  padding: 6px 8px;
+}
+.lang-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ghost.sm.on {
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  border-color: var(--chip-edge);
+}
+.bt-filter.nodata {
+  opacity: 0.5;
+}
+.tag.warn {
+  color: var(--warn);
+}
+.bt-chks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bt-chk.nodata {
+  opacity: 0.45;
+}
+.bt-equity path {
+  stroke: var(--pos);
+}
+#btResults .checks .chk {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--hair);
+  font-size: 12.5px;
+}
+#btResults .chk-ok .chk-ico {
+  color: var(--pos);
+}
+#btResults .chk-fail .chk-ico {
+  color: var(--neg);
+}
+.bt-row.off {
+  opacity: 0.5;
+}
+/* The empty-chart box shows through translucent panels. */
+body.panel-open .chart-empty {
+  visibility: hidden;
+}

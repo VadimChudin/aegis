@@ -27,6 +27,16 @@ pub struct Bar {
     pub oi: f64,
     pub ls_top: f64,
     pub taker_ratio: f64,
+    /// Average bid/ask spread in $ (quote sources only).
+    #[serde(default = "nan")]
+    pub spread: f64,
+    /// Last funding rate (fraction, e.g. 0.0001 = 1 bp).
+    #[serde(default = "nan")]
+    pub funding: f64,
+}
+
+fn nan() -> f64 {
+    f64::NAN
 }
 
 impl Bar {
@@ -53,6 +63,8 @@ impl Bar {
             oi: f64::NAN,
             ls_top: f64::NAN,
             taker_ratio: f64::NAN,
+            spread: f64::NAN,
+            funding: f64::NAN,
         }
     }
 
@@ -111,6 +123,8 @@ pub fn parse_csv(text: &str) -> Result<Vec<Bar>, String> {
         b.oi = get(&["oi"]);
         b.ls_top = get(&["ls_top"]);
         b.taker_ratio = get(&["taker_ratio"]);
+        b.spread = get(&["spread"]);
+        b.funding = get(&["funding"]);
         if [b.open, b.high, b.low, b.close].iter().any(|v| !v.is_finite()) {
             return Err(format!("line {}: bad OHLC", n + 2));
         }
@@ -119,6 +133,25 @@ pub fn parse_csv(text: &str) -> Result<Vec<Bar>, String> {
     bars.sort_by_key(|b| b.time);
     bars.dedup_by_key(|b| b.time);
     Ok(bars)
+}
+
+/// 1m candles from a CSV with the same columns as `parse_csv` (only time and OHLC are kept).
+pub fn parse_minutes(text: &str) -> Result<Vec<super::engine::Minute>, String> {
+    Ok(parse_csv(text)?
+        .into_iter()
+        .map(|b| super::engine::Minute {
+            time: b.time,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+        })
+        .collect())
+}
+
+pub fn load_minutes(path: &Path) -> Result<Vec<super::engine::Minute>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_minutes(&text)
 }
 
 pub fn load_csv(path: &Path) -> Result<Vec<Bar>, String> {

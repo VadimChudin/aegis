@@ -1,0 +1,267 @@
+time,event,importance,source
+1672858800,FOMC_MINUTES,2,federalreserve.gov
+1673011800,NFP,3,bls.gov via web.archive.org
+1673530200,CPI,3,bls.gov via web.archive.org
+1674048600,PPI,2,bls.gov via web.archive.org
+1674739800,GDP,2,bea.gov via web.archive.org
+1674826200,PCE,2,bea.gov via web.archive.org
+1675278000,FOMC,3,federalreserve.gov
+1675431000,NFP,3,bls.gov via web.archive.org
+1676381400,CPI,3,bls.gov via web.archive.org
+1676554200,PPI,2,bls.gov via web.archive.org
+1677092400,FOMC_MINUTES,2,federalreserve.gov
+1677245400,PCE,2,bea.gov via web.archive.org
+1678455000,NFP,3,bls.gov via web.archive.org
+1678797000,CPI,3,bls.gov via web.archive.org
+1678883400,PPI,2,bls.gov via web.archive.org
+1679508000,FOMC,3,federalreserve.gov
+1680265800,PCE,2,bea.gov via web.archive.org
+1680870600,NFP,3,bls.gov via web.archive.org
+1681302600,CPI,3,bls.gov via web.archive.org
+1681322400,FOMC_MINUTES,2,federalreserve.gov
+1681389000,PPI,2,bls.gov via web.archive.org
+1682598600,GDP,2,bea.gov via web.archive.org
+1682685000,PCE,2,bea.gov via web.archive.org
+1683136800,FOMC,3,federalreserve.gov
+1683289800,NFP,3,bls.gov via web.archive.org
+1683721800,CPI,3,bls.gov via web.archive.org
+1683808200,PPI,2,bls.gov via web.archive.org
+1684951200,FOMC_MINUTES,2,federalreserve.gov
+1685104200,PCE,2,bea.gov via web.archive.org
+1685709000,NFP,3,bls.gov via web.archive.org
+1686659400,CPI,3,bls.gov via web.archive.org
+1686745800,PPI,2,bls.gov via web.archive.org
+1686765600,FOMC,3,federalreserve.gov
+1688128200,PCE,2,bea.gov via web.archive.org
+1688580000,FOMC_MINUTES,2,federalreserve.gov
+1688733000,NFP,3,bls.gov via web.archive.org
+1689165000,CPI,3,bls.gov via web.archive.org
+1689251400,PPI,2,bls.gov via web.archive.org
+1690394400,FOMC,3,federalreserve.gov
+1690461000,GDP,2,bea.gov via web.archive.org
+1690547400,PCE,2,bea.gov via web.archive.org
+1691152200,NFP,3,bls.gov via web.archive.org
+1691670600,CPI,3,bls.gov via web.archive.org
+1691757000,PPI,2,bls.gov via web.archive.org
+1692208800,FOMC_MINUTES,2,federalreserve.gov
+1693485000,PCE,2,bea.gov via web.archive.org
+1693571400,NFP,3,bls.gov via web.archive.org
+1694608200,CPI,3,bls.gov via web.archive.org
+1694694600,PPI,2,bls.gov via web.archive.org
+1695232800,FOMC,3,federalreserve.gov
+1695990600,PCE,2,bea.gov via web.archive.org
+1696595400,NFP,3,bls.gov via web.archive.org
+1697027400,PPI,2,bls.gov via web.archive.org
+1697047200,FOMC_MINUTES,2,federalreserve.gov
+1697113800,CPI,3,bls.gov via web.archive.org
+1698323400,GDP,2,bea.gov via web.archive.org
+1698409800,PCE,2,bea.gov via web.archive.org
+1698861600,FOMC,3,federalreserve.gov
+1699014600,NFP,3,bls.gov via web.archive.org
+1699968600,CPI,3,bls.gov via web.archive.org
+1700055000,PPI,2,bls.gov via web.archive.org
+1700593200,FOMC_MINUTES,2,federalreserve.gov
+1701351000,PCE,2,bea.gov via web.archive.org
+1702042200,NFP,3,bls.gov via web.archive.org
+1702387800,CPI,3,bls.gov via web.archive.org
+1702474200,PPI,2,bls.gov via web.archive.org
+1702494000,FOMC,3,federalreserve.gov
+1703251800,PCE,2,bea.gov via web.archive.org
+1704308400,FOMC_MINUTES,2,federalreserve.gov
+1704461400,NFP,3,bls.gov via web.archive.org
+1704979800,CPI,3,bls.gov via web.archive.org
+1705066200,PPI,2,bls.gov via web.archive.org
+1706189400,GDP,2,bea.gov via web.archive.org
+1706275800,PCE,2,bea.gov via web.archive.org
+1706727600,FOMC,3,federalreserve.gov
+1706880600,NFP,3,bls.gov via web.archive.org
+1707831000,CPI,3,bls.gov via web.archive.org
+1708090200,PPI,2,bls.gov via web.archive.org
+1708542000,FOMC_MINUTES,2,federalreserve.gov
+1709213400,PCE,2,bea.gov via web.archive.org
+1709904600,NFP,3,bls.gov via web.archive.org
+1710246600,CPI,3,bls.gov via web.archive.org
+1710419400,PPI,2,bls.gov via web.archive.org
+1710957600,FOMC,3,federalreserve.gov
+1711715400,PCE,2,bea.gov via web.archive.org
+1712320200,NFP,3,bls.gov via web.archive.org
+1712752200,CPI,3,bls.gov via web.archive.org
+1712772000,FOMC_MINUTES,2,federalreserve.gov
+1712838600,PPI,2,bls.gov via web.archive.org
+1714048200,GDP,2,bea.gov via web.archive.org
+1714134600,PCE,2,bea.gov via web.archive.org
+1714586400,FOMC,3,federalreserve.gov
+1714739400,NFP,3,bls.gov via web.archive.org
+1715689800,PPI,2,bls.gov via web.archive.org
+1715776200,CPI,3,bls.gov via web.archive.org
+1716400800,FOMC_MINUTES,2,federalreserve.gov
+1717158600,PCE,2,bea.gov via web.archive.org
+1717763400,NFP,3,bls.gov via web.archive.org
+1718195400,CPI,3,bls.gov via web.archive.org
+1718215200,FOMC,3,federalreserve.gov
+1718281800,PPI,2,bls.gov via web.archive.org
+1719577800,PCE,2,bea.gov via web.archive.org
+1720029600,FOMC_MINUTES,2,federalreserve.gov
+1720182600,NFP,3,bls.gov via web.archive.org
+1720701000,CPI,3,bls.gov via web.archive.org
+1720787400,PPI,2,bls.gov via web.archive.org
+1721910600,GDP,2,bea.gov via web.archive.org
+1721997000,PCE,2,bea.gov via web.archive.org
+1722448800,FOMC,3,federalreserve.gov
+1722601800,NFP,3,bls.gov via web.archive.org
+1723552200,PPI,2,bls.gov via web.archive.org
+1723638600,CPI,3,bls.gov via web.archive.org
+1724263200,FOMC_MINUTES,2,federalreserve.gov
+1725021000,PCE,2,bea.gov via web.archive.org
+1725625800,NFP,3,bls.gov via web.archive.org
+1726057800,CPI,3,bls.gov via web.archive.org
+1726144200,PPI,2,bls.gov via web.archive.org
+1726682400,FOMC,3,federalreserve.gov
+1727440200,PCE,2,bea.gov via web.archive.org
+1728045000,NFP,3,bls.gov via web.archive.org
+1728496800,FOMC_MINUTES,2,federalreserve.gov
+1728563400,CPI,3,bls.gov via web.archive.org
+1728649800,PPI,2,bls.gov via web.archive.org
+1730291400,GDP,2,bea.gov via web.archive.org
+1730377800,PCE,2,bea.gov via web.archive.org
+1730464200,NFP,3,bls.gov via web.archive.org
+1731006000,FOMC,3,federalreserve.gov
+1731504600,CPI,3,bls.gov via web.archive.org
+1731591000,PPI,2,bls.gov via web.archive.org
+1732647600,FOMC_MINUTES,2,federalreserve.gov
+1732719600,PCE,2,bea.gov via web.archive.org
+1733491800,NFP,3,bls.gov via web.archive.org
+1733923800,CPI,3,bls.gov via web.archive.org
+1734010200,PPI,2,bls.gov via web.archive.org
+1734548400,FOMC,3,federalreserve.gov
+1734701400,PCE,2,bea.gov via web.archive.org
+1736362800,FOMC_MINUTES,2,federalreserve.gov
+1736515800,NFP,3,bls.gov via web.archive.org
+1736861400,PPI,2,bls.gov via web.archive.org
+1736947800,CPI,3,bls.gov via web.archive.org
+1738177200,FOMC,3,federalreserve.gov
+1738243800,GDP,2,bea.gov
+1738330200,PCE,2,bea.gov
+1738935000,NFP,3,bls.gov via web.archive.org
+1739367000,CPI,3,bls.gov via web.archive.org
+1739453400,PPI,2,bls.gov via web.archive.org
+1739991600,FOMC_MINUTES,2,federalreserve.gov
+1740749400,PCE,2,bea.gov
+1741354200,NFP,3,bls.gov via web.archive.org
+1741782600,CPI,3,bls.gov via web.archive.org
+1741869000,PPI,2,bls.gov via web.archive.org
+1742407200,FOMC,3,federalreserve.gov
+1743165000,PCE,2,bea.gov
+1743769800,NFP,3,bls.gov via web.archive.org
+1744221600,FOMC_MINUTES,2,federalreserve.gov
+1744288200,CPI,3,bls.gov via web.archive.org
+1744374600,PPI,2,bls.gov via web.archive.org
+1746016200,GDP,2,bea.gov
+1746021600,PCE,2,bea.gov
+1746189000,NFP,3,bls.gov via web.archive.org
+1746640800,FOMC,3,federalreserve.gov
+1747139400,CPI,3,bls.gov via web.archive.org
+1747312200,PPI,2,bls.gov via web.archive.org
+1748455200,FOMC_MINUTES,2,federalreserve.gov
+1748608200,PCE,2,bea.gov
+1749213000,NFP,3,bls.gov via web.archive.org
+1749645000,CPI,3,bls.gov via web.archive.org
+1749731400,PPI,2,bls.gov via web.archive.org
+1750269600,FOMC,3,federalreserve.gov
+1751027400,PCE,2,bea.gov
+1751545800,NFP,3,bls.gov via web.archive.org
+1752084000,FOMC_MINUTES,2,federalreserve.gov
+1752582600,CPI,3,bls.gov via web.archive.org
+1752669000,PPI,2,bls.gov via web.archive.org
+1753878600,GDP,2,bea.gov
+1753898400,FOMC,3,federalreserve.gov
+1753965000,PCE,2,bea.gov
+1754051400,NFP,3,bls.gov via web.archive.org
+1755001800,CPI,3,bls.gov via web.archive.org
+1755174600,PPI,2,bls.gov via web.archive.org
+1755712800,FOMC_MINUTES,2,federalreserve.gov
+1756470600,PCE,2,bea.gov
+1757075400,NFP,3,bls.gov via web.archive.org
+1757507400,PPI,2,bls.gov via web.archive.org
+1757593800,CPI,3,bls.gov via web.archive.org
+1758132000,FOMC,3,federalreserve.gov
+1758889800,PCE,2,bea.gov
+1759946400,FOMC_MINUTES,2,federalreserve.gov
+1761309000,CPI,3,bls.gov via web.archive.org
+1761760800,FOMC,3,federalreserve.gov
+1763578800,FOMC_MINUTES,2,federalreserve.gov
+1763645400,NFP,3,bls.gov via web.archive.org
+1764077400,PPI,2,bls.gov via web.archive.org
+1764946800,PCE,2,bea.gov
+1765393200,FOMC,3,federalreserve.gov
+1765891800,NFP,3,bls.gov via web.archive.org
+1766064600,CPI,3,bls.gov via web.archive.org
+1766496600,GDP,2,bea.gov
+1767121200,FOMC_MINUTES,2,federalreserve.gov
+1767965400,NFP,3,bls.gov via web.archive.org
+1768311000,CPI,3,bls.gov via web.archive.org
+1768397400,PPI,2,bls.gov via web.archive.org
+1769094000,PCE,2,bea.gov
+1769626800,FOMC,3,federalreserve.gov
+1769779800,PPI,2,bls.gov via web.archive.org
+1770816600,NFP,3,bls.gov via web.archive.org
+1770989400,CPI,3,bls.gov via web.archive.org
+1771441200,FOMC_MINUTES,2,federalreserve.gov
+1771594200,GDP,2,bea.gov
+1771594200,PCE,2,bea.gov
+1772199000,PPI,2,bls.gov via web.archive.org
+1772803800,NFP,3,bls.gov via web.archive.org
+1773232200,CPI,3,bls.gov via web.archive.org
+1773405000,PCE,2,bea.gov
+1773837000,PPI,2,bls.gov via web.archive.org
+1773856800,FOMC,3,federalreserve.gov
+1775219400,NFP,3,bls.gov via web.archive.org
+1775671200,FOMC_MINUTES,2,federalreserve.gov
+1775737800,PCE,2,bea.gov
+1775824200,CPI,3,bls.gov via web.archive.org
+1776169800,PPI,2,bls.gov via web.archive.org
+1777485600,FOMC,3,federalreserve.gov
+1777552200,GDP,2,bea.gov
+1777552200,PCE,2,bea.gov
+1778243400,NFP,3,bls.gov via web.archive.org
+1778589000,CPI,3,bls.gov via web.archive.org
+1778675400,PPI,2,bls.gov via web.archive.org
+1779300000,FOMC_MINUTES,2,federalreserve.gov
+1779971400,PCE,2,bea.gov
+1780662600,NFP,3,bls.gov via web.archive.org
+1781094600,CPI,3,bls.gov via web.archive.org
+1781181000,PPI,2,bls.gov via web.archive.org
+1781719200,FOMC,3,federalreserve.gov
+1782390600,PCE,2,bea.gov
+1782995400,NFP,3,bls.gov via web.archive.org
+1783533600,FOMC_MINUTES,2,federalreserve.gov
+1784032200,CPI,3,bls.gov via web.archive.org
+1784118600,PPI,2,bls.gov via web.archive.org
+1785348000,FOMC,3,federalreserve.gov
+1785414600,GDP,2,bea.gov
+1785414600,PCE,2,bea.gov
+1786105800,NFP,3,bls.gov via web.archive.org
+1786537800,CPI,3,bls.gov via web.archive.org
+1786624200,PPI,2,bls.gov via web.archive.org
+1787162400,FOMC_MINUTES,2,federalreserve.gov
+1787747400,PCE,2,bea.gov
+1788525000,NFP,3,bls.gov via web.archive.org
+1789043400,PPI,2,bls.gov via web.archive.org
+1789129800,CPI,3,bls.gov via web.archive.org
+1789581600,FOMC,3,federalreserve.gov
+1790771400,PCE,2,bea.gov
+1790944200,NFP,3,bls.gov via web.archive.org
+1791981000,CPI,3,bls.gov via web.archive.org
+1792067400,PPI,2,bls.gov via web.archive.org
+1793210400,FOMC,3,federalreserve.gov
+1793277000,GDP,2,bea.gov
+1793277000,PCE,2,bea.gov
+1793971800,NFP,3,bls.gov via web.archive.org
+1794317400,CPI,3,bls.gov via web.archive.org
+1794576600,PPI,2,bls.gov via web.archive.org
+1795613400,PCE,2,bea.gov
+1796391000,NFP,3,bls.gov via web.archive.org
+1796842800,FOMC,3,federalreserve.gov
+1796909400,CPI,3,bls.gov via web.archive.org
+1797341400,PPI,2,bls.gov via web.archive.org
+1798032600,PCE,2,bea.gov

@@ -51,7 +51,7 @@ def main() -> None:
     t["atr_usd"] = t["atr_usd"] if "atr_usd" in t else t.atr
     y = (t[LABEL] > 0).astype(float)
     feats = [c for c in t.columns if c not in SKIP and not c.startswith(("bounce_", "mfe", "mae", "r_"))]
-    out = {"label": "win rate, limit at level, stop 0.5 ATR beyond, target 1R, no costs",
+    out = {"label": "win rate, limit at level, stop 0.5 ATR beyond, target 1R, $0.20 spread, no commission",
            "base": float(y.mean()), "touches": int(len(t)), "metrics": {}}
     for c in feats:
         q = quintiles(t, y, c)

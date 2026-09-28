@@ -34,9 +34,6 @@ struct Session {
     summary: AccountSummary,
 }
 
-/// (loaded at, bars, source) of the backtest history.
-type CachedHistory = (std::time::Instant, Arc<Vec<aegis_core::bounce::Bar>>, String);
-
 struct AppState {
     settings: Mutex<SettingsStore>,
     /// Every connected broker. Binance, Bybit and RoboForex can be open together.
@@ -47,7 +44,7 @@ struct AppState {
     /// Bumped on every chart load; the window drops events from older feeds.
     generation: AtomicU64,
     options: ConnectOptions,
-    history: Mutex<Option<CachedHistory>>,
+    bounce: bounce_cmd::BounceState,
     cache_dir: PathBuf,
     /// Public futures API for the latest klines (no key needed).
     binance_public: String,
@@ -234,6 +231,14 @@ async fn set_auto_connect(state: State<'_, AppState>, broker: BrokerId, on: bool
 }
 
 #[tauri::command]
+async fn set_lang(state: State<'_, AppState>, lang: String) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    settings.set_lang(&lang);
+    state.save(&settings).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_theme(state: State<'_, AppState>, theme: String) -> Result<(), String> {
     let mut settings = state.settings.lock().await;
     settings.set_theme(&theme);
@@ -370,7 +375,7 @@ fn setup_state(app: &AppHandle) -> AppState {
         feed: std::sync::Mutex::new(None),
         generation: AtomicU64::new(0),
         options,
-        history: Mutex::new(None),
+        bounce: bounce_cmd::BounceState::default(),
         cache_dir,
         binance_public,
     }
@@ -397,7 +402,11 @@ fn main() {
             bounce_cmd::bounce_info,
             bounce_cmd::bounce_save,
             bounce_cmd::bounce_backtest,
-            bounce_cmd::bounce_live
+            bounce_cmd::bounce_live,
+            bounce_cmd::bounce_validate,
+            bounce_cmd::bounce_optimize,
+            bounce_cmd::bounce_preset_save,
+            set_lang
         ])
         .build(tauri::generate_context!())
         .expect("failed to start AEGIS");
