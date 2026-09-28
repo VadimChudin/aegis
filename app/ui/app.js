@@ -22,7 +22,7 @@
     busy: {},
     openCard: null,
     panel: null,
-    chart: { broker: null, tf: "15m", generation: 0, lastTime: 0, wanted: null },
+    chart: { broker: null, tf: "15m", generation: 0, lastTime: 0, wanted: null, request: 0, error: null },
   };
 
   const esc = (s) =>
@@ -130,14 +130,17 @@
   async function loadChart(broker) {
     if (!broker || !S.sessions[broker]) return;
     if (S.btView) window.AEGIS.bounce?.leaveBacktestView(true);
+    const request = ++S.chart.request;
     S.chart.broker = broker;
     const tf = S.chart.tf;
+    S.chart.error = null;
+    S.chart.generation = -1;
     clearChart();
     renderChartChrome();
     setLamp("busy", t("Loading…"));
     try {
       const data = await invoke("load_chart", { broker, timeframe: tf });
-      if (broker !== S.chart.broker || tf !== S.chart.tf) return;
+      if (request !== S.chart.request || broker !== S.chart.broker || tf !== S.chart.tf) return;
       S.chart.generation = data.generation;
       S.bars = data.candles.slice();
       candles.setData(data.candles.map(({ volume, ...bar }) => bar));
@@ -149,14 +152,19 @@
       setLamp("ok", `${t("Live")} · ${S.infos[broker].name}`);
       window.AEGIS.bounce?.onLiveChart();
     } catch (err) {
+      if (request !== S.chart.request) return;
       if (String(err) === "superseded") return;
+      S.chart.error = String(err);
       setLamp("halt", String(err));
       log(`${S.infos[broker].name} chart: ${err}`, "bad");
+      renderChartChrome();
     }
   }
 
   async function stopChart() {
+    ++S.chart.request;
     S.chart.broker = null;
+    S.chart.error = null;
     S.chart.generation = -1;
     await invoke("stop_chart");
     clearChart();
@@ -286,15 +294,18 @@
     $("statChart").textContent = info ? `${info.name} · ${session.symbol}` : "—";
     $("btnBrokers").hidden = connected.length > 0;
 
-    const empty = !b && !S.btView;
+    const empty = (!b || S.chart.error) && !S.btView;
     $("empty").hidden = !empty;
     if (empty) {
       const busy = S.order.some((id) => S.busy[id]);
-      $("emptyTitle").textContent = t(busy ? "Connecting…" : "No broker connected");
-      $("emptyText").textContent = busy
-        ? t("Checking the saved brokers.")
-        : t("AEGIS shows gold only from a broker you are connected to: Binance, Bybit or RoboForex.");
-      $("emptyConnect").hidden = busy;
+      $("emptyTitle").textContent = t(S.chart.error ? "Chart unavailable" : busy ? "Connecting…" : "No broker connected");
+      $("emptyText").textContent = S.chart.error
+        ? t("The chart could not load. Check your connection and try again.")
+        : busy
+          ? t("Checking the saved brokers.")
+          : t("AEGIS shows gold only from a broker you are connected to: Binance, Bybit or RoboForex.");
+      $("emptyConnect").textContent = t(S.chart.error ? "Retry chart" : "Connect a broker");
+      $("emptyConnect").hidden = !S.chart.error && busy;
       $("emptyIcons").innerHTML = S.order.map((id) => `<img src="${esc(S.infos[id].icon)}" alt="">`).join("");
     }
   }
@@ -682,7 +693,7 @@
     };
     $("panelClose").onclick = closePanel;
     $("btnBrokers").onclick = () => openPanel("brokers");
-    $("emptyConnect").onclick = () => openPanel("brokers");
+    $("emptyConnect").onclick = () => (S.chart.error ? loadChart(S.chart.broker) : openPanel("brokers"));
     document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => openPanel(b.dataset.open)));
     document.querySelectorAll(".rail-item").forEach((b) => {
       b.onclick = () => (b.dataset.panel === "chart" ? closePanel() : openPanel(b.dataset.panel));
