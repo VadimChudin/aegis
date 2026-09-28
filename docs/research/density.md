@@ -13,6 +13,7 @@ aggressor side from the listing on **2026-03-09**. 203 days (to 2026-09-27), ~12
 Binance has no order-book history, so this is the only source for a backtest.
 
 ```bash
+pip install -e 'python[research]'                     # numpy, pandas, orjson, numba
 python -m aegis_lab.data.bybit_history                 # download book + tape (cached)
 python -m aegis_lab.research.density extract           # replay the book, one .npz per day
 python -m aegis_lab.research.density_report            # bounce vs break by metric
