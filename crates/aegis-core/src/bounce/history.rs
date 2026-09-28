@@ -101,13 +101,43 @@ pub async fn binance_history(
     cache: &Path,
     progress: impl Fn(usize, usize),
 ) -> Result<Vec<Bar>, HistoryError> {
+    binance_klines(symbol, "5m", days, cache, progress).await
+}
+
+/// 1m candles of the same archive, for the order of events inside 5m bars.
+pub async fn binance_minutes(
+    symbol: &str,
+    days: i64,
+    cache: &Path,
+    progress: impl Fn(usize, usize),
+) -> Result<Vec<super::engine::Minute>, HistoryError> {
+    Ok(binance_klines(symbol, "1m", days, cache, progress)
+        .await?
+        .into_iter()
+        .map(|b| super::engine::Minute {
+            time: b.time,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+        })
+        .collect())
+}
+
+async fn binance_klines(
+    symbol: &str,
+    interval: &str,
+    days: i64,
+    cache: &Path,
+    progress: impl Fn(usize, usize),
+) -> Result<Vec<Bar>, HistoryError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| HistoryError::Net(e.to_string()))?;
-    let monthly = list(&client, &format!("data/futures/um/monthly/klines/{symbol}/5m/")).await?;
+    let monthly = list(&client, &format!("data/futures/um/monthly/klines/{symbol}/{interval}/")).await?;
     let months: std::collections::HashSet<&str> = monthly.iter().map(|k| tag(k)).collect();
-    let daily: Vec<String> = list(&client, &format!("data/futures/um/daily/klines/{symbol}/5m/"))
+    let daily: Vec<String> = list(&client, &format!("data/futures/um/daily/klines/{symbol}/{interval}/"))
         .await?
         .into_iter()
         .filter(|k| !months.contains(&tag(k)[..7.min(tag(k).len())]))
@@ -122,7 +152,7 @@ pub async fn binance_history(
     if keys.is_empty() {
         return Err(HistoryError::Empty(symbol.into()));
     }
-    let dir: PathBuf = cache.join(symbol).join("5m");
+    let dir: PathBuf = cache.join(symbol).join(interval);
     std::fs::create_dir_all(&dir).map_err(|e| HistoryError::Archive(e.to_string()))?;
     let mut text = String::new();
     for (n, key) in keys.iter().enumerate() {
@@ -163,6 +193,145 @@ pub async fn binance_history(
         return Err(HistoryError::Empty(symbol.into()));
     }
     Ok(bars)
+}
+
+/// Unix seconds of "YYYY-MM-DD HH:MM:SS" (UTC).
+fn parse_utc(s: &str) -> Option<i64> {
+    let (d, t) = s.trim().split_once(' ')?;
+    let mut dp = d.split('-').map(|x| x.parse::<i64>());
+    let (y, m, day) = (dp.next()?.ok()?, dp.next()?.ok()?, dp.next()?.ok()?);
+    let mut tp = t.split(':').map(|x| x.parse::<i64>());
+    let (hh, mm, ss) = (
+        tp.next()?.ok()?,
+        tp.next()?.ok()?,
+        tp.next().and_then(|x| x.ok()).unwrap_or(0),
+    );
+    // Days from civil (Howard Hinnant).
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
+/// Binance derivatives context for the backtest: open interest, top-trader long/short and taker
+/// buy/sell ratio (5m, `metrics` archive) and funding rates (`fundingRate` archive).
+#[derive(Clone, Debug, Default)]
+pub struct Extras {
+    /// (time, open interest, top-trader long/short, taker buy/sell)
+    pub metrics: Vec<(i64, f64, f64, f64)>,
+    /// (time, funding rate)
+    pub funding: Vec<(i64, f64)>,
+}
+
+async fn cached(client: &reqwest::Client, dir: &Path, key: &str) -> Result<Vec<u8>, HistoryError> {
+    let path = dir.join(key.rsplit('/').next().unwrap_or(key));
+    if let Ok(b) = std::fs::read(&path) {
+        return Ok(b);
+    }
+    let b = get(client, &format!("{BASE}/{key}")).await?;
+    let _ = std::fs::write(&path, &b);
+    Ok(b)
+}
+
+fn unzip_text(bytes: &[u8]) -> Result<String, HistoryError> {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| HistoryError::Archive(e.to_string()))?;
+    let mut f = z.by_index(0).map_err(|e| HistoryError::Archive(e.to_string()))?;
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .map_err(|e| HistoryError::Archive(e.to_string()))?;
+    Ok(s)
+}
+
+/// Downloads (and caches) the metrics and funding archives since `since`.
+pub async fn binance_extras(
+    symbol: &str,
+    since: i64,
+    cache: &Path,
+    progress: impl Fn(usize, usize),
+) -> Result<Extras, HistoryError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| HistoryError::Net(e.to_string()))?;
+    let day_since = super::backtest_month(since);
+    let metrics: Vec<String> = list(&client, &format!("data/futures/um/daily/metrics/{symbol}/"))
+        .await?
+        .into_iter()
+        .filter(|k| tag(k) >= day_since.as_str())
+        .collect();
+    let funding: Vec<String> = list(&client, &format!("data/futures/um/monthly/fundingRate/{symbol}/"))
+        .await?
+        .into_iter()
+        .filter(|k| tag(k) >= day_since.as_str())
+        .collect();
+    let dir = cache.join(symbol).join("extras");
+    std::fs::create_dir_all(&dir).map_err(|e| HistoryError::Archive(e.to_string()))?;
+    let total = metrics.len() + funding.len();
+    let mut out = Extras::default();
+    // Small files: 8 downloads at a time.
+    let mut done = 0;
+    for chunk in metrics.chunks(8) {
+        let mut set = tokio::task::JoinSet::new();
+        for key in chunk {
+            let (client, dir, key) = (client.clone(), dir.clone(), key.clone());
+            set.spawn(async move { cached(&client, &dir, &key).await });
+        }
+        while let Some(r) = set.join_next().await {
+            let bytes = r.map_err(|e| HistoryError::Net(e.to_string()))??;
+            for line in unzip_text(&bytes)?.lines().skip(1) {
+                let c: Vec<&str> = line.split(',').collect();
+                let num = |k: usize| c.get(k).and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(f64::NAN);
+                if let Some(t) = c.first().and_then(|s| parse_utc(s)) {
+                    out.metrics.push((t, num(2), num(5), num(7)));
+                }
+            }
+            done += 1;
+            progress(done, total);
+        }
+    }
+    for key in &funding {
+        let bytes = cached(&client, &dir, key).await?;
+        for line in unzip_text(&bytes)?.lines().skip(1) {
+            let mut c = line.split(',');
+            if let (Some(t), Some(_), Some(r)) = (c.next(), c.next(), c.next()) {
+                if let (Ok(t), Ok(r)) = (t.trim().parse::<i64>(), r.trim().parse::<f64>()) {
+                    out.funding.push((t / 1000, r));
+                }
+            }
+        }
+        done += 1;
+        progress(done, total);
+    }
+    out.metrics.sort_by_key(|m| m.0);
+    out.funding.sort_by_key(|f| f.0);
+    Ok(out)
+}
+
+/// Adds the extras to bars: each bar gets the latest value stamped at or before its open.
+pub fn merge_extras(bars: &mut [Bar], ex: &Extras) {
+    let (mut i, mut j) = (0usize, 0usize);
+    let (mut m, mut f) = (None, None);
+    for b in bars.iter_mut() {
+        while i < ex.metrics.len() && ex.metrics[i].0 <= b.time {
+            m = Some(ex.metrics[i]);
+            i += 1;
+        }
+        while j < ex.funding.len() && ex.funding[j].0 <= b.time {
+            f = Some(ex.funding[j].1);
+            j += 1;
+        }
+        if let Some((_, oi, ls, tr)) = m {
+            b.oi = oi;
+            b.ls_top = ls;
+            b.taker_ratio = tr;
+        }
+        if let Some(r) = f {
+            b.funding = r;
+        }
+    }
 }
 
 /// The latest 5m klines (up to 1500) from the public futures API, with taker-buy volume and
@@ -207,6 +376,21 @@ pub async fn recent_klines(base: &str, symbol: &str, limit: usize) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_and_merge() {
+        assert_eq!(parse_utc("1970-01-02 00:00:10"), Some(86_410));
+        assert_eq!(parse_utc("2026-01-05 00:00:00"), Some(BINANCE_LISTING));
+        let mut bars: Vec<Bar> = (0..4).map(|i| Bar::ohlcv(i * 300, 1., 1., 1., 1., 1.)).collect();
+        let ex = Extras {
+            metrics: vec![(300, 10.0, 1.5, 0.9)],
+            funding: vec![(0, 0.0001)],
+        };
+        merge_extras(&mut bars, &ex);
+        assert!(bars[0].oi.is_nan());
+        assert_eq!((bars[1].oi, bars[3].ls_top, bars[2].taker_ratio), (10.0, 1.5, 0.9));
+        assert_eq!(bars[0].funding, 0.0001);
+    }
 
     #[test]
     fn archive_tags() {

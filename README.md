@@ -1,6 +1,6 @@
 # AEGIS
 
-Desktop terminal for automated gold (XAU) trading. **v0.3.0:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, and the **Bounce** strategy with sliders, a win-probability model and a backtest. It does not place orders yet.
+Desktop terminal for automated gold (XAU) trading. **v0.4.0:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
 
 ## What works
 
@@ -13,7 +13,7 @@ Desktop terminal for automated gold (XAU) trading. **v0.3.0:** the gold chart fr
   - RoboForex: Python, MetaTrader5 package, MT5 login, terminal connected, Algo Trading button, trading allowed, gold symbol and spread, balance.
 - **Saved credentials:** stored in `settings.json` in the app config folder, every field encrypted (AES-256-GCM) with a key bound to this computer and user. Secrets are never sent back to the window. *Connect on start* reconnects saved brokers when AEGIS opens; *Forget* removes them.
 - **Design and themes** from Vespera: Glass dark, Glass light, Glass blue.
-- **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m history (public archive, no key) and shows the result; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability. Research: [`docs/research/bounce.md`](docs/research/bounce.md).
+- **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m and 1m history (public archive, no key) and shows the result; *Genetic algorithm* tunes the settings walk-forward; *Checks* tests whether a result is real; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability. Research: [`docs/research/bounce.md`](docs/research/bounce.md).
 - **Strategies:** Breakout, Liquidity Sweep and DATA are still stubs.
 
 ## Connecting
@@ -60,7 +60,7 @@ AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit AEGIS_CONFIG_DIR=/tmp/aegis-dev carg
 Bump the version in `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/package.json`, add a `CHANGELOG` entry, then push a tag:
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 GitHub Actions builds `AEGIS_<ver>_x64-setup.exe` (Windows) and `AEGIS_<ver>_universal.dmg` (macOS, Apple Silicon + Intel, ad-hoc signed; first launch needs *System Settings → Privacy & Security → Open Anyway*).

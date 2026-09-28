@@ -104,7 +104,8 @@ def flow(data: pathlib.Path) -> pd.DataFrame:
 def metrics(data: pathlib.Path) -> pd.DataFrame:
     frames = [_read_zip_csv(p) for p in sorted((data / "metrics").glob("*.zip"))]
     m = pd.concat(frames)
-    m["time"] = pd.to_datetime(m.create_time).astype("int64") // 10**9
+    # Seconds since epoch regardless of the datetime resolution pandas picks (ns in 2.x, us in 3.x).
+    m["time"] = (pd.to_datetime(m.create_time) - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)
     m = m.drop_duplicates("time").set_index("time").sort_index()
     return pd.DataFrame({
         "oi": m.sum_open_interest,

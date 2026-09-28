@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 — 2026-09-28
+
+- **Correction: the v0.3.0 backtest results were wrong.** When a bar touched several levels, the scanner took the level nearest the bar's low/high, which uses where price turned (look-ahead). Fixed: the first level price reaches is the touched one. With the corrected engine the Bounce strategy has **no edge** on Binance XAUUSDT 5m: every touch loses about −0.15 R per trade after RoboForex costs, even before costs it loses. The "70%" presets are removed. Details: `docs/research/bounce.md`.
+- **1m resolution:** the backtest downloads 1m candles and uses them to decide whether the stop or the target came first inside a 5m bar, and where a limit filled inside the touch bar.
+- **Genetic algorithm** (Bounce → Genetic algorithm): walk-forward GA over every slider, toggle and metric filter (tournament, SBX, polynomial mutation, elitism, immigrants), train/validation split with early stopping and a robustness-weighted final pick, random search with the same budget as a baseline, convergence chart, "Apply to sliders".
+- **Checks tab:** bootstrap intervals, Probabilistic and Deflated Sharpe, daily t-statistic, fill rules, random-level control, shuffled-metric permutation, PBO (CSCV), GA vs random search.
+- **Languages:** English, Русский, Қазақша (Settings → Language).
+- **More levels and metrics:** swings on 15m/4h/1d, previous month, equal highs/lows, fair value gaps; minutes to/since FOMC, CPI, NFP, PCE, PPI, GDP (calendar 2023–2026 from official sources), funding, spread; open interest, long/short and taker ratio from the Binance archive in the app.
+- **Settings:** positions at once, spread for data without quotes, own presets (save/delete), a compare tab; sliders without effect under the current toggles are greyed out with the reason. Every slider was checked to change the backtest (80 of 83; the other three have no data in this history).
+- Expected entries on RoboForex/Bybit charts are shifted by the current price difference to Binance.
+- Still no order placement.
+
 ## 0.3.0 — 2026-09-27
 
 - **Bounce strategy: settings and backtest.** The Bounce slot opens a panel with every setting as a slider or toggle: level kinds (5m/1h swings, previous day/week, sessions, round prices, previous day POC), sessions, direction, touch zone, stop, target, time exit, costs, and a min–max filter on each of 42 touch metrics (level, approach, market, candle, volume, tape, clusters, derivatives, time). Each metric shows its win rate by quintile from the research run.

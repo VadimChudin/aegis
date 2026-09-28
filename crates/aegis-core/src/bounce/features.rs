@@ -80,6 +80,10 @@ features! {
     Hour = "hour", "Time", "Hour, UTC", 0.0, 23.0, 1.0, "Hour of the touch bar close.";
     Weekday = "weekday", "Time", "Weekday", 0.0, 6.0, 1.0, "0 = Monday.";
     Spread = "spread_proxy", "Time", "Bar spread proxy, ATR", 0.0, 1.0, 0.01, "Median 1-tick move proxy: (high-low)/trades in ATR; wide = thin book.";
+    NewsBefore = "news_before_min", "News", "Minutes to next major release", 0.0, 1440.0, 5.0, "Minutes until the next FOMC / CPI / NFP / PCE / PPI / GDP release (scheduled in advance, so known before the touch). 1440 = none within a day.";
+    NewsAfter = "news_after_min", "News", "Minutes since last major release", 0.0, 1440.0, 5.0, "Minutes since the last major US release. Levels break more often right after news.";
+    SpreadUsd = "spread_usd", "Costs", "Quoted spread, $", 0.0, 2.0, 0.01, "Bid/ask spread of the touch bar (sources with quotes: Dukascopy, MT5).";
+    Funding = "funding_bp", "Derivatives", "Funding rate, bp", -20.0, 20.0, 0.5, "Last Binance funding rate in basis points; positive = longs pay.";
 }
 
 pub const NF: usize = FEATURES.len();

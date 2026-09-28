@@ -26,6 +26,7 @@ use crate::{
 
 const PREFIX: &str = "enc:v1:";
 pub const THEMES: [&str; 3] = ["glass-dark", "glass-light", "glass-blue"];
+pub const LANGS: [&str; 3] = ["en", "ru", "kk"];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BrokerSettings {
@@ -46,6 +47,9 @@ pub struct Settings {
     pub chart_broker: Option<BrokerId>,
     #[serde(default = "default_timeframe")]
     pub timeframe: Timeframe,
+    /// Interface language: "en", "ru" or "kk"; empty = follow the system.
+    #[serde(default)]
+    pub lang: String,
     #[serde(default)]
     brokers: BTreeMap<BrokerId, BrokerSettings>,
     /// Strategy id → its settings (sliders and toggles), as JSON.
@@ -67,6 +71,7 @@ impl Default for Settings {
             theme: default_theme(),
             chart_broker: None,
             timeframe: default_timeframe(),
+            lang: String::new(),
             brokers: BTreeMap::new(),
             strategies: BTreeMap::new(),
         }
@@ -89,6 +94,7 @@ pub struct PublicBroker {
 #[derive(Clone, Debug, Serialize)]
 pub struct PublicSettings {
     pub theme: String,
+    pub lang: String,
     pub chart_broker: Option<BrokerId>,
     pub timeframe: Timeframe,
     pub brokers: BTreeMap<BrokerId, PublicBroker>,
@@ -142,6 +148,12 @@ impl SettingsStore {
     pub fn set_theme(&mut self, theme: &str) {
         if THEMES.contains(&theme) {
             self.data.theme = theme.into();
+        }
+    }
+
+    pub fn set_lang(&mut self, lang: &str) {
+        if LANGS.contains(&lang) {
+            self.data.lang = lang.into();
         }
     }
 
@@ -242,6 +254,7 @@ impl SettingsStore {
             .collect();
         PublicSettings {
             theme: self.data.theme.clone(),
+            lang: self.data.lang.clone(),
             chart_broker: self.data.chart_broker,
             timeframe: self.data.timeframe,
             brokers,

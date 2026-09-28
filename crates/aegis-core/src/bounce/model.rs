@@ -7,7 +7,7 @@ use super::features::{index, NF};
 
 /// Metrics the model reads. All of them come from 5m klines, so the model works on the
 /// archive the app downloads (no aggTrades needed).
-pub const MODEL_FEATURES: [&str; 29] = [
+pub const MODEL_FEATURES: [&str; 31] = [
     "atr_usd",
     "atr_pct",
     "adr_used",
@@ -36,6 +36,8 @@ pub const MODEL_FEATURES: [&str; 29] = [
     "delta",
     "vol_ratio",
     "tape_speed",
+    "news_before_min",
+    "news_after_min",
     "dir",
 ];
 
