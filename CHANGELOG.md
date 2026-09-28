@@ -9,6 +9,7 @@
 - **Risk:** daily loss limit in R; the backtest shows the result in money for a risk per trade (% of account) and the leverage each trade needs, cut to a max leverage.
 - The genetic algorithm tunes the position settings when the 1-second engine is on; the sliders that have no effect with the current toggles are greyed out with the reason.
 - **Research:** still **no edge**. The best rule (trailing 0.3 ATR on ATR ≥ $5) loses −0.09 R per trade and −0.02 R even with no costs; the flow exit halves the loss of a plain limit; the walk-forward GA loses out of sample (−0.215 R; with the 70% win-rate target: 66.9% wins, 10 trades a day, −0.066 R). Details: `docs/research/bounce.md`.
+- **Research: order-book densities** on Bybit XAUUSDT (200-level book + tape since 2026-03-09): large resting orders do hold price more often (bounce rate 14.5% below 7× the median level, 31.6% above 21×), and a cascade of limits with an exit when the density is eaten or pulled earns +$0.19/oz per trade before fees out of sample, but Bybit's taker fee on the exit turns it into −$0.59/oz. Scripts in `python/aegis_lab/research/density*.py`, report `docs/research/density.md`.
 - Still no order placement.
 
 ## 0.4.0 — 2026-09-28
