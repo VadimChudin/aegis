@@ -366,7 +366,7 @@
     const autoConnect = card.querySelector(".toggle").classList.contains("on");
     S.busy[id] = true;
     renderChartChrome();
-    renderBrokersPanel();
+    renderBrokersPanel(id);
     let report = null;
     try {
       report = await invoke("broker_connect", { broker: id, form, autoConnect });
@@ -398,6 +398,7 @@
     $("panel").hidden = true;
     $("panel").classList.remove("wide", "strategy");
     $("backdrop").hidden = true;
+    $("panelBody").replaceChildren();
     document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
     document.body.classList.remove("panel-open");
@@ -432,11 +433,11 @@
 
   const ICON = { ok: "\u2713", warn: "!", fail: "\u2715", skip: "\u2013" };
 
-  function checksHtml(r) {
+  function checksHtml(r, connected) {
     if (!r) return "";
     const warns = r.checks.filter((c) => c.status === "warn").length;
     const note = warns ? ` · ${t(warns > 1 ? "{n} warnings" : "{n} warning", { n: warns })}` : "";
-    const head = r.ready ? `${t("Ready")}${note}` : r.connected ? t("Connected, see the checks") : t("Not connected");
+    const head = r.ready ? `${t("Ready")}${note}` : r.connected ? t("Connected, see the checks") : t(connected ? "Reconnect failed · previous connection still active" : "Not connected");
     const when = r.at ? new Date(r.at).toLocaleString() : "";
     const rows = r.checks
       .map(
@@ -447,13 +448,38 @@
     return `<div class="chk-head" data-ready="${r.ready ? "1" : "0"}">${esc(head)}<span class="hint">${esc(when)}</span></div>${rows}`;
   }
 
-  function renderBrokersPanel() {
+  function renderBrokersPanel(submittedId) {
     const body = $("panelBody");
     const scroll = body.scrollTop;
+    const drafts = new Map();
+    let focused = null;
+    body.querySelectorAll(".broker-card").forEach((card) => {
+      if (card.dataset.broker === submittedId) return;
+      drafts.set(card.dataset.broker, {
+        values: [...card.querySelectorAll("input[data-key]")].map((input) => input.value),
+        auto: card.querySelector(".toggle").classList.contains("on"),
+      });
+      if (card.contains(document.activeElement) && document.activeElement.matches("input[data-key]")) {
+        focused = [card.dataset.broker, document.activeElement.dataset.key];
+      }
+    });
     const intro = `<p class="hint">${esc(t("Connect one or more brokers; they stay connected together. The chart shows gold from the broker picked in the header. Credentials are stored encrypted on this computer, and secrets are never shown again."))}</p>`;
     body.innerHTML = intro + S.order.map(cardHtml).join("");
-    body.querySelectorAll(".broker-card").forEach(bindCard);
+    body.querySelectorAll(".broker-card").forEach((card) => {
+      const draft = drafts.get(card.dataset.broker);
+      if (draft) {
+        card.querySelectorAll("input[data-key]").forEach((input, i) => (input.value = draft.values[i]));
+        card.querySelector(".toggle").classList.toggle("on", draft.auto);
+      }
+      bindCard(card);
+    });
     body.scrollTop = scroll;
+    if (focused) {
+      const input = [...body.querySelectorAll(".broker-card input[data-key]")].find(
+        (node) => node.closest(".broker-card").dataset.broker === focused[0] && node.dataset.key === focused[1],
+      );
+      input?.focus({ preventScroll: true });
+    }
   }
 
   function cardHtml(id) {
@@ -498,7 +524,7 @@
             ${connected ? `<button type="button" class="ghost act-disconnect">${esc(t("Disconnect"))}</button>` : ""}
             ${hasSaved ? `<button type="button" class="ghost danger act-forget">${esc(t("Forget"))}</button>` : ""}
           </div>
-          <div class="checks">${checksHtml(report)}</div>
+          <div class="checks">${checksHtml(report, connected)}</div>
         </div>
       </section>`;
   }

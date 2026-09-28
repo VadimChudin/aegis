@@ -262,6 +262,7 @@
  "Re-arm distance, ATR",
  "Ready",
  "Reconnect",
+ "Reconnect failed · previous connection still active",
  "Rejection wick",
  "Requirements",
  "Reset",

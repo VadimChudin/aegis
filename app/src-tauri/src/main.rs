@@ -91,7 +91,6 @@ impl AppState {
     /// Opens a session from credentials, replacing this broker's previous one.
     async fn open(&self, broker: BrokerId, fields: BTreeMap<String, String>) -> ConnectReport {
         let _guard = self.connecting.lock().await;
-        self.close(broker).await;
         let report = match Credentials::from_fields(broker, &fields) {
             Err(e) => ConnectReport::input_error(broker, &e),
             Ok(credentials) => {
@@ -103,6 +102,7 @@ impl AppState {
                         symbol: connector.symbol().to_string(),
                         account: report.account.clone().unwrap_or_default(),
                     };
+                    self.close(broker).await;
                     self.sessions.lock().await.insert(
                         broker,
                         Session {
@@ -118,6 +118,91 @@ impl AppState {
         settings.set_report(broker, report.clone());
         self.save(&settings).await;
         report
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        net::TcpStream,
+        process::{Child, Command},
+        thread::sleep,
+    };
+
+    struct Mock(Child);
+
+    impl Drop for Mock {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_reconnect_keeps_existing_session_and_feed() {
+        let port = 18768;
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/mock_venues.py");
+        let python = std::env::var("AEGIS_TEST_PYTHON").unwrap_or_else(|_| "python3".into());
+        let _mock = Mock(Command::new(python).arg(script).arg(port.to_string()).spawn().unwrap());
+        for _ in 0..50 {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            sleep(Duration::from_millis(100));
+        }
+        let base = format!("http://127.0.0.1:{port}/binance");
+        let path = std::env::temp_dir().join(format!("aegis-reconnect-{}.json", std::process::id()));
+        let state = AppState {
+            settings: Mutex::new(SettingsStore::open(&path)),
+            sessions: Mutex::new(HashMap::new()),
+            connecting: Mutex::new(()),
+            feed: std::sync::Mutex::new(None),
+            generation: AtomicU64::new(0),
+            options: ConnectOptions {
+                binance_url: Some(base.clone()),
+                binance_spot_url: Some(base),
+                ..Default::default()
+            },
+            bounce: bounce_cmd::BounceState::default(),
+            cache_dir: std::env::temp_dir(),
+            binance_public: String::new(),
+        };
+        let fields = |secret: &str| {
+            BTreeMap::from([
+                ("api_key".into(), "test-key".into()),
+                ("api_secret".into(), secret.into()),
+            ])
+        };
+        assert!(
+            connect_form(&state, BrokerId::Binance, fields("test-secret"), true)
+                .await
+                .connected
+        );
+        *state.feed.lock().unwrap() = Some((
+            BrokerId::Binance,
+            async_runtime::spawn(async {
+                std::future::pending::<()>().await;
+            }),
+        ));
+        assert!(
+            !connect_form(&state, BrokerId::Binance, fields("wrong"), true)
+                .await
+                .connected
+        );
+        assert_eq!(state.summaries().await.len(), 1);
+        assert_eq!(state.generation.load(Ordering::SeqCst), 0);
+        assert!(state.feed.lock().unwrap().is_some());
+        assert_eq!(
+            state.settings.lock().await.credentials(BrokerId::Binance)["api_secret"],
+            "test-secret"
+        );
+        assert_eq!(
+            SettingsStore::open(&path).credentials(BrokerId::Binance)["api_secret"],
+            "test-secret"
+        );
+        state.close_all().await;
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -183,14 +268,27 @@ async fn broker_connect(
     form: BTreeMap<String, String>,
     auto_connect: bool,
 ) -> Result<ConnectReport, String> {
-    let fields = {
+    Ok(connect_form(&state, broker, form, auto_connect).await)
+}
+
+async fn connect_form(
+    state: &AppState,
+    broker: BrokerId,
+    form: BTreeMap<String, String>,
+    auto_connect: bool,
+) -> ConnectReport {
+    let was_connected = state.sessions.lock().await.contains_key(&broker);
+    let fields = state.settings.lock().await.merged_form(broker, &form);
+    let report = state.open(broker, fields).await;
+    {
         let mut settings = state.settings.lock().await;
-        let fields = settings.apply_form(broker, &form);
+        if report.connected || !was_connected {
+            settings.apply_form(broker, &form);
+        }
         settings.set_auto_connect(broker, auto_connect);
         state.save(&settings).await;
-        fields
-    };
-    Ok(state.open(broker, fields).await)
+    }
+    report
 }
 
 /// Connects with the stored credentials (auto-connect on start). `None` if nothing is stored.
