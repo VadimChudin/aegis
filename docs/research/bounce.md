@@ -148,6 +148,20 @@ RoboForex costs (`bounce sweep`, first and second half of the history reported a
   is −0.006 R at RoboForex costs and +0.066 R at half of them ($0.10 spread, $0.05 slippage), on
   only 0.6–0.9 trades a day.
 
+### Density exit and limit after absorption
+
+- **Exit into the density** (`dens_eat`: leave when 70% of the absorbed volume has traded at the
+  density price again) fires in 17 of 686 trades and changes the average by ≤ 0.003 R. With the
+  stop 0.05 ATR (≈ $0.3–0.5) behind the density, price reaches the stop within the same second as
+  the density: the tape only shows volume after it traded, so there is no time to leave first.
+  Seeing the density shrink before price gets there needs the order book (resting size and
+  cancellations), which the public archive does not have.
+- **Limit after absorption** loses −0.8…−1.7 R per trade: a limit 0.02–0.1 ATR off the extreme
+  fills mostly when price comes back to break the density (win rate 9–22%), and the stop is so
+  small (leverage 60–110× at 1% risk) that the exit spread alone is a large part of it.
+- Best absorption setting stays the market entry at 8× volume, target 2 R, min stop 0.4 ATR:
+  −0.006 R at RoboForex costs (first half −0.08, second half +0.06), 0.6 trades a day.
+
 ## What next
 
 - **Breakout.** Bounce loses because price usually runs through levels; the same data suggests

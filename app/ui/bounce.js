@@ -155,7 +155,7 @@
   }
 
   // Settings only the 1-second engine uses (params.rs `sec_only`).
-  const SEC_ONLY = new Set(["absorb", "abs_window", "abs_vol", "abs_hold_atr", "abs_confirm_atr", "abs_stop_atr", "abs_wait", "be_r", "trail_atr", "trail_from_r", "part_frac", "part_r", "eat_vol", "flip", "flip_sl_atr", "flip_tp_r"]);
+  const SEC_ONLY = new Set(["absorb", "abs_window", "abs_vol", "abs_hold_atr", "abs_confirm_atr", "abs_stop_atr", "abs_wait", "abs_limit", "abs_limit_atr", "dens_eat", "be_r", "trail_atr", "trail_from_r", "part_frac", "part_r", "eat_vol", "flip", "flip_sl_atr", "flip_tp_r"]);
 
   /** Why a setting has no effect with the current toggles ("" when it is active). */
   function inactive(id) {
@@ -164,7 +164,10 @@
     if (id === "fill_through" && (p.entry === "close" || (p.sec_engine && p.absorb))) return t("Only for limit entries.");
     if (SEC_ONLY.has(id) && !p.sec_engine) return t("Only with the 1-second engine.");
     if (id === "absorb" && p.entry === "close") return t("Only for limit entries.");
-    if (id.startsWith("abs_") && id !== "abs_window" && !p.absorb) return t("Only with absorption entry.");
+    if ((id.startsWith("abs_") && id !== "abs_window") || id === "dens_eat") {
+      if (!p.absorb) return t("Only with absorption entry.");
+    }
+    if (id === "abs_limit_atr" && !p.abs_limit) return t("Only with the limit after absorption.");
     if (id === "abs_window" && !p.absorb && !(p.eat_vol > 0)) return t("Only with absorption entry or the flow exit.");
     if (id === "sl_atr" && p.sec_engine && p.absorb && p.entry !== "close") return t("Absorption sets the stop.");
     if (id === "trail_from_r" && !(p.trail_atr > 0)) return t("Only with a trailing stop.");
@@ -314,7 +317,7 @@
     )}</th></tr>${rows}</table></div>`;
   }
 
-  const OUTCOMES = { tp: "Target", sl: "Stop", be: "Breakeven", trail: "Trailing stop", flow: "Flow exit", time: "time" };
+  const OUTCOMES = { tp: "Target", sl: "Stop", be: "Breakeven", trail: "Trailing stop", flow: "Flow exit", dens: "Density eaten", time: "time" };
   const outcome = (o) => t(OUTCOMES[o] || o);
 
   function exitHtml(tr) {
@@ -625,7 +628,7 @@
         el.classList.toggle("on");
         setParam(el.dataset.id, el.classList.contains("on"));
         if (el.dataset.id === "entry") B.available = null;
-        if (["entry", "use_model", "sec_engine", "absorb", "flip"].includes(el.dataset.id)) render();
+        if (["entry", "use_model", "sec_engine", "absorb", "abs_limit", "flip"].includes(el.dataset.id)) render();
       };
     });
     body.querySelectorAll('#btSettings [data-kind="slider"]').forEach((r) => {

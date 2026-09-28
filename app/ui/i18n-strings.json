@@ -466,5 +466,12 @@
  "partial",
  "flip",
  "Money at {risk}% risk per trade: account {ret}%, max drawdown {dd}%. Leverage needed: median {lm}×, max {lx}× ({cap} cut to {max}×).",
- "Downloading Binance trades for the 1-second engine"
+ "Downloading Binance trades for the 1-second engine",
+ "Limit after absorption",
+ "After the absorption, rest a limit order near its extreme and wait for the pull-back instead of entering at market: no spread or slippage on the entry, maker fee, but some trades never fill.",
+ "Limit off the extreme, ATR",
+ "Exit when density eaten, share",
+ "The volume absorbed at entry is the density the stop hides behind. Exit at market when aggressive volume at that price reaches this share of it again, before the stop. 0.7 = leave with 30% left. 0 = off. Estimated from trades, not from the order book.",
+ "Only with the limit after absorption.",
+ "Density eaten"
 ]

@@ -75,8 +75,13 @@ pub struct Params {
     pub abs_confirm_atr: f64,
     /// Stop behind the absorption extreme, ATR.
     pub abs_stop_atr: f64,
-    /// Give up waiting for absorption after this many seconds.
+    /// Give up waiting for absorption (or for the limit fill after it) after this many seconds.
     pub abs_wait: f64,
+    /// After absorption, rest a limit `abs_limit_atr` off the extreme instead of a market entry.
+    pub abs_limit: bool,
+    pub abs_limit_atr: f64,
+    /// Exit when this share of the absorbed volume has traded at the density price again (0 = off).
+    pub dens_eat: f64,
     /// Move the stop to breakeven after this many R (0 = off).
     pub be_r: f64,
     /// Trailing stop distance, ATR (0 = off), active after `trail_from_r` R.
@@ -139,6 +144,9 @@ impl Default for Params {
             abs_confirm_atr: 0.05,
             abs_stop_atr: 0.05,
             abs_wait: 300.0,
+            abs_limit: false,
+            abs_limit_atr: 0.05,
+            dens_eat: 0.0,
             be_r: 0.0,
             trail_atr: 0.0,
             trail_from_r: 0.5,
@@ -164,6 +172,9 @@ pub fn sec_only(id: &str) -> bool {
             | "abs_confirm_atr"
             | "abs_stop_atr"
             | "abs_wait"
+            | "abs_limit"
+            | "abs_limit_atr"
+            | "dens_eat"
             | "be_r"
             | "trail_atr"
             | "trail_from_r"
@@ -271,6 +282,9 @@ impl Params {
             "abs_confirm_atr" => self.abs_confirm_atr,
             "abs_stop_atr" => self.abs_stop_atr,
             "abs_wait" => self.abs_wait,
+            "abs_limit" => b(self.abs_limit),
+            "abs_limit_atr" => self.abs_limit_atr,
+            "dens_eat" => self.dens_eat,
             "be_r" => self.be_r,
             "trail_atr" => self.trail_atr,
             "trail_from_r" => self.trail_from_r,
@@ -341,6 +355,9 @@ impl Params {
             "abs_confirm_atr" => self.abs_confirm_atr = v,
             "abs_stop_atr" => self.abs_stop_atr = v,
             "abs_wait" => self.abs_wait = v,
+            "abs_limit" => self.abs_limit = on,
+            "abs_limit_atr" => self.abs_limit_atr = v,
+            "dens_eat" => self.dens_eat = v,
             "be_r" => self.be_r = v,
             "trail_atr" => self.trail_atr = v,
             "trail_from_r" => self.trail_from_r = v,
@@ -591,6 +608,18 @@ pub fn param_specs() -> Vec<ParamSpec> {
         30.0,
         "Give up when no absorption comes this long after price reached the level.",
     );
+    push("abs_limit", "Absorption", "Limit after absorption", "toggle", 0., 1., 1., "After the absorption, rest a limit order near its extreme and wait for the pull-back instead of entering at market: no spread or slippage on the entry, maker fee, but some trades never fill.");
+    push(
+        "abs_limit_atr",
+        "Absorption",
+        "Limit off the extreme, ATR",
+        "slider",
+        0.0,
+        0.3,
+        0.01,
+        "",
+    );
+    push("dens_eat", "Absorption", "Exit when density eaten, share", "slider", 0.0, 1.0, 0.05, "The volume absorbed at entry is the density the stop hides behind. Exit at market when aggressive volume at that price reaches this share of it again, before the stop. 0.7 = leave with 30% left. 0 = off. Estimated from trades, not from the order book.");
     push(
         "day_stop_r",
         "Risk",

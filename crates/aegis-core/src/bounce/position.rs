@@ -11,6 +11,13 @@
 //!   `trail_from_r` R, partial take profit of `part_frac` at `part_r` R, the target `tp_r`, a time
 //!   exit, and a **flow exit**: aggressive volume against the position of `eat_vol` × average
 //!   over `abs_window` seconds while price is through the level (the level is being eaten).
+//! - **Density exit**: the aggressive volume absorbed at the entry is taken as the size of the
+//!   resting orders (the "density") the stop hides behind. When aggressive volume at that price
+//!   reaches `dens_eat` of it again, the density is being eaten: exit at market before the stop
+//!   (`dens_eat` 0.7 = leave with 30% of it left). The tape shows traded volume, not the book, so
+//!   this estimates the density; icebergs and cancelled orders are not seen.
+//! - **Limit after absorption** (`abs_limit`): instead of a market entry, rest a limit
+//!   `abs_limit_atr` off the absorption extreme and wait for the pull-back (maker fee, no spread).
 //! - **Flip**: when the first position ends at its initial stop or by a flow exit, an opposite
 //!   position opens at market (the breakout), stop `flip_sl_atr` behind the level, target
 //!   `flip_tp_r` R, the same management. Its R is added to the trade's R (each leg risks 1 R).
@@ -72,6 +79,9 @@ struct Leg {
     part_px: f64,
     entry_fee: f64,
     entry_time: i64,
+    /// Density price (the absorption extreme) and its absorbed volume; NaN when none.
+    zone: f64,
+    dens: f64,
 }
 
 struct Exit {
@@ -98,6 +108,8 @@ impl Leg {
             part_px: entry + d * p.part_r * risk,
             entry_fee,
             entry_time,
+            zone: f64::NAN,
+            dens: f64::NAN,
         })
     }
 
@@ -122,6 +134,8 @@ fn manage(s: &[Sec], start: usize, end: i64, leg: &Leg, c: &Ctx) -> Exit {
     let w = p.abs_window.max(1.0) as i64;
     let eat = p.eat_vol * c.vbase * w as f64;
     let (mut lo, mut flow) = (start, 0.0f64);
+    let dens_on = p.dens_eat > 0.0 && leg.zone.is_finite() && leg.dens > 0.0;
+    let mut eaten = 0.0f64;
     let mut last: Option<&Sec> = None;
     for (j, x) in s.iter().enumerate().skip(start) {
         if x.time >= end {
@@ -173,6 +187,18 @@ fn manage(s: &[Sec], start: usize, end: i64, leg: &Leg, c: &Ctx) -> Exit {
                 }
             }
         }
+        // Volume traded at the density price again: how much of it is gone.
+        if dens_on && d * (adverse(d, x) - leg.zone) <= 0.03 * c.atr {
+            eaten += against(d, x);
+            if eaten >= p.dens_eat * leg.dens {
+                return Exit {
+                    price: exit_side(d, cl, c.sp) - d * p.slippage,
+                    time: x.time,
+                    outcome: "dens",
+                    part,
+                };
+            }
+        }
         if p.eat_vol > 0.0 {
             flow += against(d, x);
             while s[lo].time <= x.time - w {
@@ -201,8 +227,19 @@ fn manage(s: &[Sec], start: usize, end: i64, leg: &Leg, c: &Ctx) -> Exit {
     }
 }
 
-/// Absorption entry: (entry, stop, index of the entry second).
-fn absorb(s: &[Sec], t: &Touch, bar_end: i64, end: i64, c: &Ctx) -> Option<(f64, f64, usize)> {
+struct Absorbed {
+    entry: f64,
+    stop: f64,
+    /// Second of the entry (the fill second for a limit).
+    k: usize,
+    /// A limit filled at the extreme of second `k`: that extreme may already stop it.
+    limit: bool,
+    ext: f64,
+    dens: f64,
+}
+
+/// Absorption entry.
+fn absorb(s: &[Sec], t: &Touch, bar_end: i64, end: i64, c: &Ctx) -> Option<Absorbed> {
     let (p, d) = (c.p, t.dir as f64);
     let reach = s
         .iter()
@@ -231,10 +268,40 @@ fn absorb(s: &[Sec], t: &Touch, bar_end: i64, end: i64, c: &Ctx) -> Option<(f64,
             lo += 1;
         }
         if into >= need && d * (x.close as f64 - ext) >= p.abs_confirm_atr * c.atr {
-            let nx = s.get(j + 1).filter(|n| n.time < end)?;
-            let entry = entry_side(d, nx.open as f64, c.sp) + d * p.slippage;
             let stop = exit_side(d, ext, c.sp) - d * p.abs_stop_atr * c.atr;
-            return Some((entry, stop, j + 1));
+            if !p.abs_limit {
+                let nx = s.get(j + 1).filter(|n| n.time < end)?;
+                let entry = entry_side(d, nx.open as f64, c.sp) + d * p.slippage;
+                return Some(Absorbed {
+                    entry,
+                    stop,
+                    k: j + 1,
+                    limit: false,
+                    ext,
+                    dens: into,
+                });
+            }
+            // Rest a limit off the extreme and wait for the pull-back.
+            let px = ext + d * p.abs_limit_atr * c.atr;
+            let deadline = x.time + p.abs_wait as i64;
+            let k = (j + 1..s.len())
+                .take_while(|&k| s[k].time < end && s[k].time <= deadline)
+                .find(|&k| {
+                    let y = &s[k];
+                    if d > 0.0 {
+                        px - (y.low as f64 + c.sp) >= p.fill_through
+                    } else {
+                        y.high as f64 - px >= p.fill_through
+                    }
+                })?;
+            return Some(Absorbed {
+                entry: px,
+                stop,
+                k,
+                limit: true,
+                ext,
+                dens: into,
+            });
         }
     }
     None
@@ -278,8 +345,23 @@ pub fn simulate_secs(bars: &[Bar], secs: &[Sec], t: &Touch, p: &Params) -> Optio
         let entry = entry_side(d, x.open as f64, c.sp) + d * p.slippage;
         (Leg::new(&c, d, entry, stop, p.tp_r, p.taker_bps, x.time)?, k, None)
     } else if p.absorb {
-        let (entry, stop, k) = absorb(s, t, bar_end, end, &c)?;
-        (Leg::new(&c, d, entry, stop, p.tp_r, p.taker_bps, s[k].time)?, k, None)
+        let a = absorb(s, t, bar_end, end, &c)?;
+        let fee = if a.limit { p.maker_bps } else { p.taker_bps };
+        let mut leg = Leg::new(&c, d, a.entry, a.stop, p.tp_r, fee, s[a.k].time)?;
+        leg.zone = a.ext;
+        leg.dens = a.dens;
+        if a.limit {
+            let stopped = d * (exit_side(d, adverse(d, &s[a.k]), c.sp) - leg.stop) <= 0.0;
+            let first = stopped.then(|| Exit {
+                price: leg.stop - d * p.slippage,
+                time: s[a.k].time,
+                outcome: "sl",
+                part: false,
+            });
+            (leg, a.k + 1, first)
+        } else {
+            (leg, a.k, None)
+        }
     } else {
         let k = s.iter().take_while(|x| x.time < bar_end).position(|x| {
             if d > 0.0 {
@@ -325,7 +407,7 @@ pub fn simulate_secs(bars: &[Bar], secs: &[Sec], t: &Touch, p: &Params) -> Optio
         part: if x1.part { leg.part_px } else { f64::NAN },
         ..Trade::empty()
     };
-    if p.flip && matches!(x1.outcome, "sl" | "flow") {
+    if p.flip && matches!(x1.outcome, "sl" | "flow" | "dens") {
         let k = s.partition_point(|x| x.time <= x1.time);
         if let Some(nx) = s.get(k) {
             let d2 = -d;
@@ -495,6 +577,45 @@ mod tests {
         let mut quiet = s.clone();
         quiet.iter_mut().for_each(|x| x.sell = 0.1);
         assert!(simulate_secs(&b, &quiet, &touch(100.0, 100.0, 1), &p).is_none());
+    }
+
+    #[test]
+    fn density_exit_leaves_before_the_stop_and_limit_waits_for_the_pull_back() {
+        let b = bars(40);
+        let t0 = 12 * 300;
+        let mut s = path(t0, &[100.5, 100.1, 99.95, 99.9, 99.92, 99.95, 100.0, 100.05]);
+        for x in &mut s[2..6] {
+            x.sell = 20.0;
+        }
+        // Back to the density: sellers eat it (3 × 20 = 75% of the 80 absorbed), then it breaks.
+        s.extend(path(t0 + 8, &[100.05, 99.95, 99.91, 99.9, 99.9, 99.88, 99.7]));
+        for x in &mut s[10..13] {
+            x.sell = 20.0;
+        }
+        let p = Params {
+            absorb: true,
+            abs_window: 10.0,
+            abs_vol: 5.0,
+            abs_hold_atr: 0.2,
+            abs_confirm_atr: 0.08,
+            abs_stop_atr: 0.05,
+            dens_eat: 0.7,
+            tp_r: 3.0,
+            ..costless()
+        };
+        let (tr, _) = simulate_secs(&b, &s, &touch(100.0, 100.0, 1), &p).unwrap();
+        assert_eq!(tr.outcome, "dens");
+        assert!(tr.exit > tr.sl, "left at {} before the stop {}", tr.exit, tr.sl);
+        // A limit 0.05 ATR off the extreme (99.95) fills on the pull-back, not at the confirmation.
+        let p = Params {
+            abs_limit: true,
+            abs_limit_atr: 0.05,
+            dens_eat: 0.0,
+            ..p
+        };
+        let (tr, _) = simulate_secs(&b, &s, &touch(100.0, 100.0, 1), &p).unwrap();
+        assert!((tr.entry - 99.95).abs() < 1e-4, "entry {}", tr.entry);
+        assert_eq!(tr.entry_time, t0 + 9);
     }
 
     #[test]

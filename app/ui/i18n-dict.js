@@ -477,7 +477,14 @@ window.I18N_DICT = {
   "partial": "частично",
   "flip": "переворот",
   "Money at {risk}% risk per trade: account {ret}%, max drawdown {dd}%. Leverage needed: median {lm}×, max {lx}× ({cap} cut to {max}×).": "В деньгах при риске {risk}% на сделку: депозит {ret}%, макс. просадка {dd}%. Нужное плечо: медиана {lm}×, максимум {lx}× ({cap} урезано до {max}×).",
-  "Downloading Binance trades for the 1-second engine": "Загрузка сделок Binance для посекундного движка"
+  "Downloading Binance trades for the 1-second engine": "Загрузка сделок Binance для посекундного движка",
+  "Limit after absorption": "Лимитка после поглощения",
+  "After the absorption, rest a limit order near its extreme and wait for the pull-back instead of entering at market: no spread or slippage on the entry, maker fee, but some trades never fill.": "После поглощения поставить лимитку у его экстремума и ждать отката вместо входа по рынку: без спреда и проскальзывания на входе, комиссия мейкера, но часть сделок не исполнится.",
+  "Limit off the extreme, ATR": "Лимитка от экстремума, ATR",
+  "Exit when density eaten, share": "Выход, когда плотность разобрали, доля",
+  "The volume absorbed at entry is the density the stop hides behind. Exit at market when aggressive volume at that price reaches this share of it again, before the stop. 0.7 = leave with 30% left. 0 = off. Estimated from trades, not from the order book.": "Объём, поглощённый при входе, — это плотность, за которой стоит стоп. Выйти по рынку до стопа, когда агрессивный объём на этой цене снова наберёт эту долю от неё. 0,7 = выйти, когда осталось 30%. 0 = выкл. Оценка по сделкам, не по стакану.",
+  "Only with the limit after absorption.": "Только с лимиткой после поглощения.",
+  "Density eaten": "Плотность разобрали"
  },
  "kk": {
   "0 = Monday.": "0 = дүйсенбі.",
@@ -955,6 +962,13 @@ window.I18N_DICT = {
   "partial": "ішінара",
   "flip": "аудару",
   "Money at {risk}% risk per trade: account {ret}%, max drawdown {dd}%. Leverage needed: median {lm}×, max {lx}× ({cap} cut to {max}×).": "Мәмілеге {risk}% тәуекелмен ақшада: депозит {ret}%, макс. құлдырау {dd}%. Қажетті иін: медиана {lm}×, максимум {lx}× ({cap} {max}× дейін қысқартылды).",
-  "Downloading Binance trades for the 1-second engine": "Секундтық қозғалтқыш үшін Binance мәмілелерін жүктеу"
+  "Downloading Binance trades for the 1-second engine": "Секундтық қозғалтқыш үшін Binance мәмілелерін жүктеу",
+  "Limit after absorption": "Сіңіруден кейін лимит",
+  "After the absorption, rest a limit order near its extreme and wait for the pull-back instead of entering at market: no spread or slippage on the entry, maker fee, but some trades never fill.": "Сіңіруден кейін нарық бойынша кірудің орнына оның экстремумына лимит қойып, кері қайтуды күту: кіруде спред пен сырғу жоқ, мейкер комиссиясы, бірақ кейбір мәмілелер орындалмайды.",
+  "Limit off the extreme, ATR": "Экстремумнан лимит, ATR",
+  "Exit when density eaten, share": "Тығыздық жегенде шығу, үлес",
+  "The volume absorbed at entry is the density the stop hides behind. Exit at market when aggressive volume at that price reaches this share of it again, before the stop. 0.7 = leave with 30% left. 0 = off. Estimated from trades, not from the order book.": "Кіру кезінде сіңірілген көлем — стоп артында тұрған тығыздық. Осы бағада агрессивті көлем оның осы үлесіне қайта жеткенде, стопқа дейін нарық бойынша шығу. 0,7 = 30% қалғанда шығу. 0 = өшірулі. Стакан емес, мәмілелер бойынша бағалау.",
+  "Only with the limit after absorption.": "Тек сіңіруден кейінгі лимитпен.",
+  "Density eaten": "Тығыздық жеңілді"
  }
 };
