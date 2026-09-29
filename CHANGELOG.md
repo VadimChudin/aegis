@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Research: flush → buyback on the order book** (`flush.py`, `flush_report.py`, `docs/research/flush.md`). 204 days of the Bybit XAUUSDT 200-level book and tape replayed into 1-second rows (depth by distance, added / eaten / pulled, aggressor volume) with the Binance tape and the macro calendar. A fast drop is bought back half of its leg in 49-50% of cases at every scale (0.15%/10 min to 0.5%/60 min), the same as a random moment. Only the book within $1 separates the outcomes: offers piling up above predict continuation (0.5% drops: 42% vs 53% buyback, both halves); tape, news, hour and prior trend do not. Every low is a selling climax; in a buyback bids refill three times faster in the next 10 s. Not tradeable after costs.
+
 ## 0.5.1 — 2026-09-29
 
 - **Fix (Brokers):** the broker form stays usable while a connection check runs: the typed values are kept, only the Connect button shows *Connecting…*, and every label is linked to its field.
