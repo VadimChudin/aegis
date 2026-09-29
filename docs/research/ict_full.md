@@ -41,7 +41,7 @@ displacement FVG, and 2 604-2 753 limits fill. One setting trades **19-42 times 
 
 ## Result
 
-180 tradable settings (5 biases without oracle × 3 sessions × 2 MSS timeframes × 2 entries ×
+288 tradable settings (4 biases without oracle × 3 sessions × 2 MSS timeframes × 2 entries ×
 6 exits); 170 have ≥ 100 trades in 2008-14.
 
 - **None is positive net in 2008-14.** The best is −0.013 R. Out of sample (2015-25), 56% are
