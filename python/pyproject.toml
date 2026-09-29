@@ -7,7 +7,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mt5 = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
-research = ["numpy", "pandas", "orjson", "numba", "pyarrow"]
+research = ["numpy", "pandas", "orjson", "numba", "pyarrow", "tabulate"]
 
 [build-system]
 requires = ["setuptools>=68"]
