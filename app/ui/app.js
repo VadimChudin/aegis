@@ -354,7 +354,7 @@
     await refreshSessions();
     S.settings = await invoke("settings_get");
     renderChartChrome();
-    if (S.panel === "brokers") renderBrokersPanel(null, retryDraft && { id, ...retryDraft });
+    if (S.panel === "brokers") renderBrokersPanel(report?.connected ? id : null, retryDraft && { id, ...retryDraft });
     await ensureChart();
   }
 
@@ -377,7 +377,9 @@
     const autoConnect = card.querySelector(".toggle").classList.contains("on");
     S.busy[id] = true;
     renderChartChrome();
-    renderBrokersPanel(id);
+    const button = card.querySelector(".act-connect");
+    button.disabled = true;
+    button.textContent = t("Connecting…");
     let report = null;
     try {
       report = await invoke("broker_connect", { broker: id, form, autoConnect });
@@ -506,10 +508,10 @@
         const stored = f.secret && saved.stored.includes(f.key);
         const value = f.secret ? "" : saved.values[f.key] || "";
         const ph = stored ? t("Stored · leave empty to keep") : f.placeholder || "";
-        const fieldId = `${id}-${f.key}`;
-        const input = `<input id="${esc(fieldId)}" data-key="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />`;
+        const inputId = `broker-${id}-${f.key}`;
+        const input = `<input id="${esc(inputId)}" data-key="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />`;
         const row = i === 0 ? `<div class="api-row"><img class="api-mark" src="${esc(info.icon)}" alt="">${input}</div>` : input;
-        return `<div class="field"><label for="${esc(fieldId)}">${esc(t(f.label))}${f.optional ? ` (${esc(t("optional"))})` : ""}</label>${row}<p class="hint">${esc(t(f.hint))}</p></div>`;
+        return `<div class="field"><label for="${esc(inputId)}">${esc(t(f.label))}${f.optional ? ` (${esc(t("optional"))})` : ""}</label>${row}<p class="hint">${esc(t(f.hint))}</p></div>`;
       })
       .join("");
     const connected = !!S.sessions[id];
@@ -552,7 +554,8 @@
     const toggle = card.querySelector(".toggle");
     toggle.onclick = async () => {
       toggle.classList.toggle("on");
-      if (S.settings.brokers[id].stored.length) await invoke("set_auto_connect", { broker: id, on: toggle.classList.contains("on") });
+      const saved = S.settings.brokers[id];
+      if (saved.stored.length || Object.keys(saved.values).length) await invoke("set_auto_connect", { broker: id, on: toggle.classList.contains("on") });
     };
     card.querySelector(".act-connect").onclick = () => connectForm(id);
     card.querySelectorAll("input").forEach((i) =>
