@@ -72,6 +72,42 @@ it. The *Slippage per market fill* slider covers that gap in real trading.
   seed; beats random search with the same budget out of sample on real data; on permuted metrics
   its out-of-sample result is negative.
 
+### GA audit (September 2026): is the GA the reason nothing works?
+
+Binance XAUUSDT 5m + 1m, 2025-12 … 2026-09, default settings (limit, RoboForex costs, model on).
+Out of sample = the walk-forward test months joined together.
+
+| Run | GA settings | Generations run (of max) | Train (in sample), avg R | Out of sample |
+|---|---|---|---|---|
+| A | default: pop 48, 30 gen, patience 8, win-rate target 70%, 20 trades/day | 9-17 of 30 | −0.10…+0.13, win 67-79% | 304 trades, 63% win, **−0.078 R** |
+| B | targets off, min 10 trades | — | +0.04…+0.50, win 62-95% | 104 trades, **−0.385 R** |
+| C | targets off, min 10, pop 128, 100 gen, patience 30 | 31-51 of 100 | +0.10…+0.60, win up to 100% | 47 trades, **−0.176 R** |
+| C, seed 21 | same | — | +0.13…+1.16, win up to 100% | 35 trades, **−0.687 R** |
+| E | C with a 120-day train window | — | +0.25…+1.24, win 94-100% | 12 trades, **−0.179 R** |
+| D (control) | C on **shuffled** metrics | — | — | 41 trades, **−0.232 R** |
+| **F (fixed GA)** | targets off, min 30, pop 128, 100 gen, patience 30 | 35-53 of 100 | +0.14…+0.72, win 53-90% | 128 trades, 65% win, **+0.001 R** |
+| A2 (fixed GA) | default | 9-19 of 30 | — | 249 trades, 65% win, −0.079 R |
+
+Two real configuration faults were found and fixed:
+
+1. **Early stopping followed noise.** Validation is a quarter of the train window (≈ 15 days)
+   but used the same *min trades* (30). Almost every genome scored the "too few trades" penalty
+   there (≈ −9.4), so validation fitness was flat. The GA stopped after 9-17 of 30 generations
+   while train fitness was still rising, and the final pick was driven by trade count.
+   Validation now uses *min trades* scaled to its length (`validation_objective`, test
+   `validation_minimum_scales_with_its_length`).
+2. **The win-rate target outweighed profit.** Missing 70% costs 40 t-units per unit of win rate:
+   a 45% strategy gets −10, more than any real edge earns. The GA was pushed to tiny targets
+   with high win rate that lose on average (A: 63% wins, −0.08 R). In the app the slider started
+   at 50%, so the target could not be switched off. Both targets can now be set to 0 (off).
+
+Conclusion: the GA was mis-set, but it is not why nothing is profitable. When the limits are
+removed, it overfits freely: 90-100% wins and up to +1.2 R per trade in the train months, then a
+loss the next month. On shuffled metrics it does as well as on the real ones (D vs C). The fixed
+GA with a large budget is the best result so far (F: breakeven over 128 trades against −0.08 R).
+That is one seed and still no edge after costs. The limit is the data: about 9 months of Binance
+gold and 20-100 trades per train window. That is too little to tell +0.1 R from noise.
+
 ## Statistical checks (`validate.rs`)
 
 | Check | Method |
