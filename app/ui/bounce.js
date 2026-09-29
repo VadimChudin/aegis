@@ -161,14 +161,15 @@
   function inactive(id) {
     if (id === "min_prob" && !B.params.use_model) return t("Only with the probability model on.");
     const p = B.params;
-    if (id === "fill_through" && (p.entry === "close" || (p.sec_engine && p.absorb))) return t("Only for limit entries.");
+    // The limit after absorption also waits for a trade-through.
+    if (id === "fill_through" && (p.entry === "close" || (p.sec_engine && p.absorb && !p.abs_limit))) return t("Only for limit entries.");
     if (SEC_ONLY.has(id) && !p.sec_engine) return t("Only with the 1-second engine.");
     if (id === "absorb" && p.entry === "close") return t("Only for limit entries.");
     if ((id.startsWith("abs_") && id !== "abs_window") || id === "dens_eat") {
-      if (!p.absorb) return t("Only with absorption entry.");
+      if (!p.absorb || p.entry === "close") return t("Only with absorption entry.");
     }
     if (id === "abs_limit_atr" && !p.abs_limit) return t("Only with the limit after absorption.");
-    if (id === "abs_window" && !p.absorb && !(p.eat_vol > 0)) return t("Only with absorption entry or the flow exit.");
+    if (id === "abs_window" && !(p.absorb && p.entry !== "close") && !(p.eat_vol > 0)) return t("Only with absorption entry or the flow exit.");
     if (id === "sl_atr" && p.sec_engine && p.absorb && p.entry !== "close") return t("Absorption sets the stop.");
     if (id === "trail_from_r" && !(p.trail_atr > 0)) return t("Only with a trailing stop.");
     if (id === "part_r" && !(p.part_frac > 0)) return t("Only with a partial exit.");

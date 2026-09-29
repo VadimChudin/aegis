@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Fix (Bounce):** changing *Limit after absorption*, its distance, or *Density exit* did not change the backtest after the first run: they were missing from the simulation cache key, so the GA and trade selection reused old results. The GA no longer tunes *Min win probability* outside the slider's range or when the model is off. *Trade-through* stays active with the limit after absorption; absorption sliders are greyed with close entry, where they do nothing. Every setting was re-checked on real data (1-second engine included): all change the backtest when their prerequisites are on, except spread and funding filters (no such data in Binance history).
+- **Research: smart money (DATA):** order blocks, FVGs and liquidity sweeps on 1h/4h with limit, grid or 1m CHoCH entry: no setup is positive after fees; order block + CHoCH is positive before fees but within noise; a wide search (6 000 settings, confluences, CHoCH retest limit, liquidity target, trailing) and a walk-forward "Auto" test (−0.31 R per trade) confirm no edge. Every engine is now checked on a random walk. Report `docs/research/smc.md`.
+
 ## 0.5.0 — 2026-09-28
 
 - **1-second position engine** (Bounce → Position → *1-second engine*): entries and exits are simulated second by second on Binance aggTrades (downloaded once and kept as 1-second candles with buy and sell volume). It agrees with the bar engine when no management is set.
