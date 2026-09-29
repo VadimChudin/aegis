@@ -80,9 +80,11 @@ HIST_URL = ("https://huggingface.co/datasets/agzdws/xauusd-gold-price-historical
 
 
 def hist_minutes(start="2019-01-01", end="2025-03-01") -> pd.DataFrame:
-    """XAUUSD CFD 1m (MetaTrader export on Hugging Face, 2004-2025). Server time is New York + 7 h
-    (the week opens at 01:00 = 18:00 NY in summer and winter). Complete until 2025-02; later
-    months have gaps. No spread column."""
+    """XAUUSD CFD 1m (MetaTrader export on Hugging Face, 2004-2025). Server time is EET/EEST
+    (UTC+2 / UTC+3 with EU daylight saving): the week opens at 01:00 server = 18:00 New York,
+    except in the weeks when only the US is on summer time, when the day ends at 15:59 New York
+    under a fixed "New York + 7" reading. Complete until 2025-02; later months have gaps.
+    No spread column."""
     import orjson
     import urllib.request
 
@@ -102,8 +104,8 @@ def hist_minutes(start="2019-01-01", end="2025-03-01") -> pd.DataFrame:
             r = orjson.loads(line)
             rows.append((r["Date"], r["Open"], r["High"], r["Low"], r["Close"], r["Volume"]))
     m = pd.DataFrame(rows, columns=["d", "o", "h", "l", "c", "v"])
-    ny = pd.to_datetime(m.d, format="%Y.%m.%d %H:%M") - pd.Timedelta(hours=7)
-    utc = ny.dt.tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
+    server = pd.to_datetime(m.d, format="%Y.%m.%d %H:%M")
+    utc = server.dt.tz_localize("Europe/Athens", ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
     secs = (utc - pd.Timestamp("1970-01-01", tz="UTC")).dt.total_seconds()
     m = m.assign(t=secs)[utc.notna().to_numpy()]
     m["t"] = m.t.astype(np.int64)

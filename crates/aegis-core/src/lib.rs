@@ -4,6 +4,7 @@
 pub mod bounce;
 pub mod broker;
 pub mod checks;
+pub mod data;
 pub mod market;
 pub mod settings;
 pub mod strategy;

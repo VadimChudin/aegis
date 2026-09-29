@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bounce_cmd;
+mod data_cmd;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -504,6 +505,11 @@ fn main() {
             bounce_cmd::bounce_validate,
             bounce_cmd::bounce_optimize,
             bounce_cmd::bounce_preset_save,
+            data_cmd::data_info,
+            data_cmd::data_save,
+            data_cmd::data_backtest,
+            data_cmd::data_live,
+            data_cmd::data_journal_clear,
             set_lang
         ])
         .build(tauri::generate_context!())

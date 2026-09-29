@@ -394,12 +394,35 @@ pub fn merge_extras(bars: &mut [Bar], ex: &Extras) {
 /// The latest 5m klines (up to 1500) from the public futures API, with taker-buy volume and
 /// trade counts. Fills the day or two the archive has not published yet.
 pub async fn recent_klines(base: &str, symbol: &str, limit: usize) -> Result<Vec<Bar>, HistoryError> {
+    recent(base, symbol, "5m", limit).await
+}
+
+/// The latest closed 1m candles (up to 1500, about 25 hours) from the public futures API.
+pub async fn recent_minutes(
+    base: &str,
+    symbol: &str,
+    limit: usize,
+) -> Result<Vec<super::engine::Minute>, HistoryError> {
+    Ok(recent(base, symbol, "1m", limit)
+        .await?
+        .into_iter()
+        .map(|b| super::engine::Minute {
+            time: b.time,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+        })
+        .collect())
+}
+
+async fn recent(base: &str, symbol: &str, interval: &str, limit: usize) -> Result<Vec<Bar>, HistoryError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| HistoryError::Net(e.to_string()))?;
     let url = format!(
-        "{base}/fapi/v1/klines?symbol={symbol}&interval=5m&limit={}",
+        "{base}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={}",
         limit.clamp(1, 1500)
     );
     let body: serde_json::Value =

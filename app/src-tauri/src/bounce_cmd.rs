@@ -188,6 +188,12 @@ async fn history(app: &AppHandle, state: &AppState) -> Result<(Arc<Vec<Bar>>, Ar
     Ok((bars, mins, source))
 }
 
+/// The 1m candles of the history (shared with the DATA strategy).
+pub(crate) async fn minutes(app: &AppHandle, state: &AppState) -> Result<(Arc<Vec<Minute>>, String), String> {
+    let (_, mins, source) = history(app, state).await?;
+    Ok((mins, source))
+}
+
 /// 1-second candles since the listing: `AEGIS_SECONDS_FILE` (a file from the research CLI's
 /// `seconds` command) or the aggTrades archive, converted once and cached on disk.
 async fn seconds(app: &AppHandle, state: &AppState) -> Result<Arc<Vec<Sec>>, String> {

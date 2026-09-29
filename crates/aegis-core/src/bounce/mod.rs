@@ -27,8 +27,8 @@ pub use engine::{
 pub use features::{FeatureSpec, FEATURES, NF};
 pub use ga::{optimize, GaSpec, OptimizeReport};
 pub use history::{
-    binance_extras, binance_history, binance_minutes, binance_seconds, merge_extras, recent_klines, Extras,
-    HistoryError, BINANCE_LISTING,
+    binance_extras, binance_history, binance_minutes, binance_seconds, merge_extras, recent_klines, recent_minutes,
+    Extras, HistoryError, BINANCE_LISTING,
 };
 pub use model::MODEL_FEATURES;
 pub use params::{param_specs, sec_only, Filter, ParamSpec, Params, SESSIONS};

@@ -1,5 +1,5 @@
-//! Strategy slots. Bounce has settings and a backtest (`crate::bounce`); the other slots are
-//! stubs. No slot produces live signals or orders yet.
+//! Strategy slots. Bounce (`crate::bounce`) and DATA (`crate::data`) have settings and a
+//! backtest; the other slots are stubs. No slot places orders yet.
 
 use serde::Serialize;
 
@@ -89,7 +89,8 @@ stub!(
     Data,
     "data",
     "DATA",
-    "Statistical setups mined from history: ticks, volume and order book."
+    "Smart-money rules that passed the research. Now: Power of 3 from the New York midnight open. Backtest, today's signal and a paper journal (no live orders yet).",
+    Backtest
 );
 
 pub fn registry() -> Vec<Box<dyn Strategy>> {
@@ -117,7 +118,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), 4);
         for s in catalog() {
-            let want = if s.id == "bounce" {
+            let want = if s.id == "bounce" || s.id == "data" {
                 StrategyStatus::Backtest
             } else {
                 StrategyStatus::Stub
