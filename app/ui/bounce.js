@@ -399,8 +399,9 @@
   // ---- tab: genetic algorithm ------------------------------------------------------------------
 
   const GA_FIELDS = [
-    ["target_win_rate", "Target win rate", 0.5, 0.9, 0.01, 2],
-    ["target_trades_per_day", "Target trades per day", 1, 100, 1, 0],
+    // 0 switches a target off; the win-rate target alone pushes the GA to tiny targets that lose.
+    ["target_win_rate", "Target win rate", 0, 0.9, 0.01, 2],
+    ["target_trades_per_day", "Target trades per day", 0, 100, 1, 0],
     ["population", "Population", 16, 128, 8, 0],
     ["generations", "Generations", 5, 100, 1, 0],
     ["patience", "Stop after generations without progress", 3, 30, 1, 0],
