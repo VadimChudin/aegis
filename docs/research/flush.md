@@ -18,6 +18,8 @@ python -m aegis_lab.data.bybit_history                         # book + tape, ~1
 python -m aegis_lab.data.binance_vision --symbol XAUUSDT --kinds aggTrades metrics
 python -m aegis_lab.research.flush extract                     # 1-second rows, ~40 min on 4 cores
 python -m aegis_lab.research.flush report                      # all tables below, ~3 min
+python -m aegis_lab.research.flush_bounce                      # "is there always a small bounce?"
+python -m aegis_lab.research.flush_sim                         # grid, partial exits, trailing
 ```
 
 ## Events
@@ -90,3 +92,48 @@ about $5 at $4 500. What remains usable:
 
 Limits: Bybit is a small venue (a typical level holds ~0.5 oz); price discovery happens on COMEX
 GC, whose order-by-order data (CME MBO) is paid. Six months of one regime (gold at $4 300-5 200).
+
+## "After a flush there is always a small bounce"
+
+True, and it is the same after any moment. Share of drops where price rises a·L before it falls
+b·L more, next to random open seconds with the same distances and to b / (a + b), the answer for a
+price with no memory (`flush_bounce.py`). Cells: drops / random / no memory.
+
+| Scale (chart) | Drops | Stop b | Bounce 0.1 L | 0.2 L | 0.3 L | 0.5 L |
+|---|---|---|---|---|---|---|
+| 0.15% in 10 min (1m) | 10 590 | 0.5 L | 79 / 78 / 83 | 69 / 68 / 71 | 60 / 60 / 62 | 49 / 48 / 50 |
+| 0.30% in 30 min (5m) | 2 985 | 0.5 L | 82 / 80 / 83 | 71 / 69 / 71 | 62 / 60 / 62 | 50 / 47 / 50 |
+| 0.50% in 60 min (15m) | 1 107 | 0.5 L | 83 / 81 / 83 | 73 / 68 / 71 | 63 / 59 / 62 | 50 / 46 / 50 |
+| 1.0% in 4 h (1h) | 310 | 0.5 L | 85 / 81 / 83 | 71 / 67 / 71 | 60 / 57 / 62 | 47 / 45 / 50 |
+| 2.0% in 24 h (4h) | 92 | 0.5 L | 82 / 80 / 83 | 66 / 67 / 71 | 59 / 58 / 62 | 45 / 43 / 50 |
+
+A small bounce before a larger further drop happens 70-85% of the time, exactly as often as for a
+price with no memory: a close target is simply reached more often than a far one. Measured from
+the true low (known only afterwards), the median bounce is 0.6 L at every scale; that is what the
+eye picks up on a chart, where the low is already visible.
+
+## Trading it: grid, partial exits, trailing (`flush_sim.py`)
+
+Drops traded long, rallies short, at 0.30% / 30 min (6 010 events) and 0.50% / 60 min (2 197).
+Entries: market at the trigger; a limit grid at 0 / 0.25 / 0.5 L or 0.25 / 0.5 / 0.75 L below;
+confirmation (+0.15 L off the running low). Exits: take-profit 0.5 L; half at 0.5 L and trail
+0.3 L (breakeven after the first half); trail 0.3 L; half at 0.3 L and trail 0.5 L. Stop 0.3 L
+below the last grid level, 4 h limit, 1-second fills against real trades, with and without the
+book filter (thresholds fitted on the first half).
+
+| 0.30% / 30 min | $/oz, Bybit fees | $/oz, CFD $0.25 | Win % |
+|---|---|---|---|
+| Market · TP 0.5 L | −4.62 | −0.57 | 37 |
+| Grid 0/0.25/0.5 L · TP 0.5 L | −2.20 | −0.63 | **63** |
+| Grid 0/0.25/0.5 L · half at 0.3 L + trail 0.5 L | −2.15 | −0.51 | 52 |
+| Grid 0/0.25/0.5 L · trail 0.3 L | −1.61 | −0.26 | 20 |
+| Confirm off the low · trail 0.3 L | −4.88 | −0.25 | 16 |
+| Book filter · grid 0/0.25/0.5 L · trail 0.3 L (best on the first half) | −1.53 | −0.22 | 20 |
+| Same rules from random seconds (5 seeds) | −1.39 … −1.51 | −0.11 … −0.22 | 19-21 |
+
+All 64 combinations lose at both scales, in both halves, and even at $0.25/oz CFD costs (gross
+per trade is −0.2 … −0.6 $/oz). A grid raises the win rate to 62-75% because it buys lower and
+takes a close target, but the rare full-grid stop-outs cost more; it does not make the average
+positive. The best combination does the same from random seconds. Grid, partial exits and
+trailing change the shape of the results, not the sign: they cannot create an edge that the
+entry does not have.
