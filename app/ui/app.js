@@ -345,7 +345,7 @@
     }
   }
 
-  async function afterConnect(id, report) {
+  async function afterConnect(id, report, retryDraft) {
     S.busy[id] = false;
     if (report) {
       S.reports[id] = report;
@@ -354,7 +354,7 @@
     await refreshSessions();
     S.settings = await invoke("settings_get");
     renderChartChrome();
-    if (S.panel === "brokers") renderBrokersPanel();
+    if (S.panel === "brokers") renderBrokersPanel(null, retryDraft && { id, ...retryDraft });
     await ensureChart();
   }
 
@@ -384,7 +384,7 @@
     } catch (err) {
       log(`${S.infos[id].name}: ${err}`, "bad");
     }
-    await afterConnect(id, report);
+    await afterConnect(id, report, report?.connected ? null : { form, autoConnect });
   }
 
   async function disconnect(id, forget) {
@@ -459,7 +459,7 @@
     return `<div class="chk-head" data-ready="${r.ready ? "1" : "0"}">${esc(head)}<span class="hint">${esc(when)}</span></div>${rows}`;
   }
 
-  function renderBrokersPanel(submittedId) {
+  function renderBrokersPanel(submittedId, retryDraft) {
     const body = $("panelBody");
     const scroll = body.scrollTop;
     const drafts = new Map();
@@ -477,7 +477,9 @@
     const intro = `<p class="hint">${esc(t("Connect one or more brokers; they stay connected together. The chart shows gold from the broker picked in the header. Credentials are stored encrypted on this computer, and secrets are never shown again."))}</p>`;
     body.innerHTML = intro + S.order.map(cardHtml).join("");
     body.querySelectorAll(".broker-card").forEach((card) => {
-      const draft = drafts.get(card.dataset.broker);
+      const draft = card.dataset.broker === retryDraft?.id
+        ? { values: [...card.querySelectorAll("input[data-key]")].map((input) => retryDraft.form[input.dataset.key] || ""), auto: retryDraft.autoConnect }
+        : drafts.get(card.dataset.broker);
       if (draft) {
         card.querySelectorAll("input[data-key]").forEach((input, i) => (input.value = draft.values[i]));
         card.querySelector(".toggle").classList.toggle("on", draft.auto);
@@ -504,9 +506,10 @@
         const stored = f.secret && saved.stored.includes(f.key);
         const value = f.secret ? "" : saved.values[f.key] || "";
         const ph = stored ? t("Stored · leave empty to keep") : f.placeholder || "";
-        const input = `<input data-key="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />`;
+        const fieldId = `${id}-${f.key}`;
+        const input = `<input id="${esc(fieldId)}" data-key="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />`;
         const row = i === 0 ? `<div class="api-row"><img class="api-mark" src="${esc(info.icon)}" alt="">${input}</div>` : input;
-        return `<div class="field"><label>${esc(t(f.label))}${f.optional ? ` (${esc(t("optional"))})` : ""}</label>${row}<p class="hint">${esc(t(f.hint))}</p></div>`;
+        return `<div class="field"><label for="${esc(fieldId)}">${esc(t(f.label))}${f.optional ? ` (${esc(t("optional"))})` : ""}</label>${row}<p class="hint">${esc(t(f.hint))}</p></div>`;
       })
       .join("");
     const connected = !!S.sessions[id];
