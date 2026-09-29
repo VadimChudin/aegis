@@ -7,6 +7,7 @@ re-implemented from the public descriptions.
 ```bash
 python -m aegis_lab.research.gold_lab       # H1 components, 2004-2025, and pair merges
 python -m aegis_lab.research.gold_sessions  # 1m session effects 2008-2025, Power of 3 from 2008
+python -m aegis_lab.research.gold_parts     # parts of the systems on the live tiles, FOMC tiles
 ```
 
 Data: XAUUSD CFD 1h 2004-06 … 2025-02 and 1m 2008 … 2025-02 (MetaTrader export on Hugging Face,
@@ -85,16 +86,69 @@ night keeps the effect:
 It works only in the 2019+ bull market, so it is not a structural edge. Paper-trade it only as a
 regime bet.
 
+## Level 2: the parts bin (`gold_parts.py`)
+
+The systems above are taken apart, and each part becomes a yes/no flag that is known at the tile's
+decision time: trend (EMA200 H1 from Trident / maker-tung, MACD H4 from Golden Edge, 60-day
+momentum), chop (efficiency ratio, Trident), volatility regime, RSI(2) (Connors), last day and
+New York session direction, turn of month, weekday, FOMC day and the day before. A part is kept
+only if days with it on beat days with it off in **both** 2008-14 and 2015-25 (difference
+t ≥ 1.5 each).
+
+- **Asian tile: no part kept.** Trend filters *hurt*: nights with gold above EMA200 earn +0.1 bp,
+  below +3.2 bp in 2015-25 (Δt −2.0). The drift is not trend beta. Best partial signals, each in
+  one half only: Thursday (+4.0 vs +0.8 bp, 2015-25), last day up (+2.6 vs −1.5 bp, 2008-14).
+- **Power of 3: no part kept.** On the business day before FOMC it loses −0.49 R (2008-14,
+  Δt −4.5) and −0.15 R (2015-25, Δt −1.5, just short of the bar). By side, only longs are
+  positive and only from 2019 (+0.08 / +0.14 R): the bull-market reading stands.
+
+## Level 1c: FOMC tiles (136 scheduled statements, 2008 … 2025-02)
+
+Dates are parsed from federalreserve.gov (historical pages 2008-2020 and the current calendar).
+Unscheduled meetings, conference calls and notation votes are excluded. Each window is compared
+with the same clock window on every other weekday.
+
+| Tile, gross bp | FOMC 2008-14 | other days | FOMC 2015-25 | other days | FOMC net of $0.25 | FOMC − other, t |
+|---|---|---|---|---|---|---|
+| **long 14:00 day before → 13:55** | +18.9 (t +1.1) | +2.3 | +22.0 (t +2.9) | +2.9 | +18.9 bp (t +2.3) | +2.2 |
+| long the shock 14:00 → 14:30 | +1.6 | 0.0 | +5.0 | −0.1 | +1.8 bp | +1.1 |
+| follow the 14:00-14:30 move to 16:50 | +27.0 (n 29) | −0.4 | +4.7 | −0.7 | +9.9 bp | +1.9 |
+| follow the 14:00-14:30 move to next day 14:00 | +63.0 (t +2.0) | +2.0 | +19.6 (t +1.6) | +4.7 | +35.5 bp (t +2.4) | +2.2 |
+
+**Pre-FOMC drift.** Gold rises into the statement (the known pre-FOMC drift in equities also
+shows up in gold). Checks:
+
+| Entry → 13:55 on FOMC day | 2008-11 | 2012-15 | 2016-18 | 2019-22 | 2023-25 | all, net | years up | FOMC − other, t |
+|---|---|---|---|---|---|---|---|---|
+| 14:00 day before | +34.1 | −2.4 | +33.9 | +7.0 | +44.1 | +18.9 (t +2.3) | 11/18 | +2.2 |
+| 18:05 evening before | +15.9 | −1.4 | +34.6 | +8.8 | +39.5 | +14.8 (t +1.9) | 12/18 | +1.8 |
+| **02:00 on the day** (no overnight, no swap) | +25.7 | −6.2 | +26.3 | +6.3 | +44.4 | +14.5 (t +2.1) | 12/18 | **+2.7** |
+| 08:30 on the day | +16.1 | +2.9 | +28.1 | +0.6 | +27.6 | +11.2 (t +1.5) | 12/18 | +1.9 |
+
+- The effect is positive in 4 of 5 periods for every entry time and is not a 2019+ regime.
+- Placebo: the same window on dates shifted by ±1…3 weeks gives −1.5…+12.4 bp (t ≤ 1.4). The real
+  date gives +20.7 bp (t +2.5).
+- Limits: 8 trades a year, ≈ +1.2%/yr at 1× notional. Eight variants were tried, so t ≈ 2-2.7
+  is a candidate, not a proof. 2012-15 is flat.
+- The post-statement "follow the move" tiles are positive but carried by 2008-14 (+63 bp) and fall
+  to t 1.6 afterwards: not kept.
+- NFP and CPI tiles need release dates since 2008. bls.gov refuses scripts and the Wayback
+  Machine rate-limited this run (HTTP 429), so they are not tested yet.
+
 ## The board
 
 | Tile | Level | Status |
 |---|---|---|
 | Asian session drift 18:05-02:00 | 1 | **alive**, thin (net Sharpe ≈ 0.5, needs ≤ $0.25/oz round trip) |
+| Pre-FOMC drift 02:00 → 13:55 on FOMC day | 1 | **alive, candidate**: +14.5 bp net per trade, 8 a year, t 2.1-2.7 |
 | Power of 3 08:30 | 1 | regime-only (2019+) |
 | Friday anomaly | 1 | dead after 2014 |
 | Trend, Turtle, EMA, MACD, Trident, RSI(2), macro filters | 1 | no timing edge on gold |
 | Breakout / mean reversion H1, SMC, bounce, density | 1 | lose after costs |
+| Parts of the above as filters on Asia / Power of 3 (17 parts) | 2 | none improves either tile in both halves |
+| Follow the FOMC move to the next day | 1 | 2008-14 only |
 | Asia + Power of 3 (disjoint hours, correlation +0.03) | 2 | Sharpe +0.29 over 2008-2025, carried by 2020+ only |
 
-Next tiles worth adding: the Asian drift at lower cost (limit entry at 18:05, real RoboForex
-spread from MT5), and effects tied to scheduled events (FOMC, CPI) on the full 2008 history.
+Asia and pre-FOMC use different hours (18:05-02:00 against 02:00-13:55), so both can run on one
+account. Next: NFP / CPI tiles once release dates since 2008 are available, the real RoboForex
+spread from MT5, and paper trading both live tiles.
