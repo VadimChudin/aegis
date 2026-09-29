@@ -329,6 +329,18 @@ pub fn eval(
     (fitness(&q, p.active_filters(), o), q)
 }
 
+/// The validation slice is a third of the train slice, so the same `min_trades` would score
+/// almost every genome by the "too few trades" penalty and early stopping would follow noise.
+fn validation_objective(o: &Objective, w: &Window) -> Objective {
+    let train = (w.train.1 - w.train.0).max(1) as f64;
+    let val = (w.validation.1 - w.validation.0) as f64;
+    let scaled = (o.min_trades as f64 * val / train).round() as usize;
+    Objective {
+        min_trades: scaled.max(5).min(o.min_trades),
+        ..*o
+    }
+}
+
 fn tournament(fit: &[f64], rng: &mut Rng) -> usize {
     let mut best = rng.below(fit.len());
     for _ in 0..2 {
@@ -353,6 +365,7 @@ pub fn run_ga(
 ) -> GaRun {
     let n = spec.population.max(8);
     let rate = 1.0 / genes.len().max(1) as f64;
+    let ov = validation_objective(o, w);
     let start = encode(base, genes);
     let mut pop: Vec<Vec<f64>> = std::iter::once(start.clone())
         .chain((1..n).map(|_| random_genome(genes, &start, rng)))
@@ -382,7 +395,7 @@ pub fn run_ga(
         hall.sort_by(|a, b| b.0.total_cmp(&a.0));
         hall.truncate(12);
         let bi = (0..n).max_by(|&a, &b| fit[a].total_cmp(&fit[b])).unwrap_or(0);
-        let (vf, _) = eval(engine, base, genes, &pop[bi], w.validation, o);
+        let (vf, _) = eval(engine, base, genes, &pop[bi], w.validation, &ov);
         evaluations += 1;
         let mut distinct = pop.clone();
         distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -442,7 +455,7 @@ pub fn run_ga(
     // Final choice: validation fitness and neighbourhood robustness of the best distinct genomes.
     let mut best = (f64::NEG_INFINITY, start.clone(), f64::NEG_INFINITY, f64::NEG_INFINITY);
     for (train_f, x) in &hall {
-        let (vf, _) = eval(engine, base, genes, x, w.validation, o);
+        let (vf, _) = eval(engine, base, genes, x, w.validation, &ov);
         let neighbours: Vec<Vec<f64>> = (0..6)
             .map(|_| {
                 let mut y = x.clone();
@@ -497,7 +510,15 @@ pub fn random_search(
         .unwrap_or(0);
     (
         scored[bi],
-        eval(engine, base, genes, &pool[bi], w.validation, o).0,
+        eval(
+            engine,
+            base,
+            genes,
+            &pool[bi],
+            w.validation,
+            &validation_objective(o, w),
+        )
+        .0,
         apply(base, genes, &pool[bi]),
     )
 }
@@ -817,5 +838,19 @@ mod tests {
         assert!(good > low_wr && good > few);
         assert!(fitness(&q(400, 300, 20.0), 5, &o) < good);
         assert!(fitness(&q(10, 10, 20.0), 0, &o) < few);
+    }
+
+    #[test]
+    fn validation_minimum_scales_with_its_length() {
+        let o = Objective {
+            target_win_rate: 0.0,
+            target_trades_per_day: 0.0,
+            min_trades: 30,
+            complexity: 0.0,
+        };
+        let w = split(0, 4000);
+        assert_eq!(validation_objective(&o, &w).min_trades, 10);
+        let small = Objective { min_trades: 10, ..o };
+        assert_eq!(validation_objective(&small, &w).min_trades, 5);
     }
 }
