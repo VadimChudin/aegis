@@ -1,5 +1,9 @@
 # Smart money (SMC) on gold: zones on 1h/4h, entry on 1m (DATA strategy research)
 
+> **Update (September 2026): the same zones on 17 years of XAUUSD.** See *17-year test* at the
+> end. No setting is positive after costs in both 2008-14 and 2015-25, and the order block +
+> CHoCH lead does not hold.
+
 Question: do mechanical SMC setups (order blocks, fair value gaps, liquidity sweeps, with
 structure, premium/discount and killzone filters) earn on XAUUSDT after fees, with the entry
 the trader uses: a limit, a grid of limits, or a 1m change of character (CHoCH)?
@@ -91,3 +95,54 @@ fees, and automatic re-tuning loses. Tuning more settings on the same 9 months w
 curve fits. What could change the answer: much cheaper execution (RoboForex spread/commission),
 more history (XAUUSD CFD from Dukascopy goes back years: `aegis_lab.data.dukascopy`), or a
 discretionary element the rules above miss.
+
+## 17-year test: XAUUSD 1m, 2008 … 2025-02 (`smc_long.py`)
+
+This is the "more history" test above. The zone builder (`smc.zones`) and the 1m simulator
+(`smc._sim`) are unchanged. They run on the MetaTrader CFD history used in `gold_lab.md`
+(5.9 M minutes, New York clock) with RoboForex-like costs: $0.25/oz round trip plus $0.05/oz
+slippage on the CHoCH market entry. R is per planned risk, as above.
+
+- Zones: 1h has 6 167 order blocks, 19 866 FVGs and 22 185 sweeps; 4h has 1 541 / 5 651 / 7 344.
+- The grid has 192 settings: 1h/4h × OB/FVG/sweep × limit / limit at the middle / grid / CHoCH
+  × trend filter × killzones (London 02-05, New York 07-11 NY) × RR 1.5/3. Settings are chosen on
+  2008-14 only; 2015-25 is never used for selection.
+
+```bash
+python -m aegis_lab.research.smc_long   # ≈ 1.5 min after the 1m cache from gold_sessions exists
+```
+
+**Result: 0 of 186 settings (≥ 100 trades in 2008-14) are positive net in both halves.**
+
+| Best in 2008-14 | 2008-11 | 2012-14 | 2015-18 | 2019-22 | 2023-25 | 2015-25, random zones (5 seeds) |
+|---|---|---|---|---|---|---|
+| sweep, CHoCH, 4h, killzones, RR 3 | +0.19 | +0.09 | −0.17 | −0.27 | +0.05 | −0.31 … +0.13 |
+| sweep, CHoCH, 4h, trend, RR 3 | +0.31 | −0.06 | −0.02 | −0.47 | −0.07 | −0.22 … +0.01 |
+| sweep, CHoCH, 4h, RR 3 | +0.22 | −0.04 | −0.17 | −0.30 | +0.02 | −0.32 … −0.07 |
+
+Net R per trade, 75-320 trades per cell. The top in-sample settings lose in 2015-25 (t −1.8 to
+−3.0) and sit inside the random-zone range.
+
+**Order block + CHoCH** (the lead from the Binance test):
+
+| OB + CHoCH, trend | Trades 2008-14 | Gross / net 2008-14 | Trades 2015-25 | Gross / net 2015-25 |
+|---|---|---|---|---|
+| 1h, RR 1.5 | 561 | +0.06 / −0.08 | 950 | −0.04 / −0.19 |
+| 1h, RR 3 | 561 | +0.09 / −0.05 | 950 | −0.12 / −0.27 |
+| 4h, killzones, RR 1.5 | 80 | +0.24 / +0.14 | 158 | +0.04 / −0.06 |
+| 4h, RR 1.5 | 124 | +0.21 / +0.09 | 252 | −0.05 / −0.18 |
+
+- The CHoCH entry is the only one with a positive median before costs in 2008-14 (+0.06 R). In
+  2015-25 it is −0.04 R. Limit, grid and middle-of-zone entries are negative before costs in both
+  halves.
+- 23 settings are positive before costs in both halves. None has more than +0.13 R gross, and
+  after costs all are negative (best −0.001 R). A $0.25 round trip on these risks costs about
+  0.1 R.
+- Killzones make results worse (median −0.15 vs −0.09 R). The trend filter changes nothing, and
+  for order blocks it is identical by construction: an OB is created by a break in its own
+  direction.
+
+**Conclusion.** With 17 years of history and cheap CFD costs, mechanical OB/FVG/sweep zones have
+no edge on gold. This is the same answer as the 9-month Binance test, now on 20× more data and
+across bull and bear regimes (2012-15 and 2016-18 included). What remains untested is only the
+discretionary element.
