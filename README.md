@@ -1,6 +1,10 @@
 # AEGIS
 
-Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
+Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward AMALGAM optimiser and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
+
+## AMALGAM development update
+
+The default Bounce optimizer uses an adaptive multimethod, multiobjective AMALGAM variant, together with execution and train/validation cutoff regressions. Legacy `ga` command IDs are retained for compatibility. See [`docs/research/amalgam.md`](docs/research/amalgam.md) for the algorithm, test protocol and limitations. This does not establish a profitable strategy; historical reports below describe earlier versions.
 
 ## What works
 
@@ -13,7 +17,7 @@ Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart fr
   - RoboForex: Python, MetaTrader5 package, MT5 login, terminal connected, Algo Trading button, trading allowed, gold symbol and spread, balance.
 - **Saved credentials:** stored in `settings.json` in the app config folder, every field encrypted (AES-256-GCM) with a key bound to this computer and user. Secrets are never sent back to the window. *Connect on start* reconnects saved brokers when AEGIS opens; *Forget* removes them.
 - **Design and themes** from Vespera: Glass dark, Glass light, Glass blue.
-- **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m and 1m history (public archive, no key) and shows the result; *Genetic algorithm* tunes the settings walk-forward; *Checks* tests whether a result is real; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability.
+- **Bounce strategy** (rail → Strategies → Bounce): every setting is a slider or toggle, including a min–max filter on each of 42 touch metrics; *Run backtest* downloads Binance XAUUSDT 5m and 1m history (public archive, no key) and shows the result; *AMALGAM* tunes the settings walk-forward; *Checks* tests whether a result is real; *Show on chart* draws entries with probability and exits with R. On the live Binance chart the expected entries are drawn with their probability.
 - **1-second position engine** (Bounce → Position): entries and exits are simulated second by second on Binance aggTrades (downloaded once, about 1 GB, kept as 1-second candles). It adds an *absorption* entry (aggressive volume into the level while price holds, stop just behind the absorption extreme), breakeven, trailing stop, partial exit, a *flow exit* when the level is being eaten, a *flip* into the breakout when the bounce fails, a daily loss limit, and a money view with risk per trade and the leverage it needs. Research: [`docs/research/bounce.md`](docs/research/bounce.md).
 - **Order-book densities (research):** Bybit XAUUSDT book (200 levels) and tape since 2026-03-09 are replayed to test the bounce off a large resting order with a cascade of limits. Gross edge exists, Bybit fees erase it. Research: [`docs/research/density.md`](docs/research/density.md).
 - **Strategies:** Breakout, Liquidity Sweep and DATA are still stubs.

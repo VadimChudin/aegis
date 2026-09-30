@@ -56,6 +56,25 @@ fn adverse(d: f64, s: &Sec) -> f64 {
     f64::from(if d > 0.0 { s.low } else { s.high })
 }
 
+/// A resting entry limit can fill in a gap already beyond its stop. In that
+/// case the stop executes at the open's exit-side price, not at a stale stop.
+fn fill_second_stop(d: f64, x: &Sec, stop: f64, c: &Ctx) -> Option<Exit> {
+    let open = exit_side(d, x.open as f64, c.sp);
+    let price = if d * (open - stop) <= 0.0 {
+        open
+    } else if d * (exit_side(d, adverse(d, x), c.sp) - stop) <= 0.0 {
+        stop
+    } else {
+        return None;
+    };
+    Some(Exit {
+        price: price - d * c.p.slippage,
+        time: x.time,
+        outcome: "sl",
+        part: false,
+    })
+}
+
 /// Aggressive volume against a position in direction `d` (sells hit a long's level).
 fn against(d: f64, s: &Sec) -> f64 {
     f64::from(if d > 0.0 { s.sell } else { s.buy })
@@ -156,7 +175,9 @@ fn manage(s: &[Sec], start: usize, end: i64, leg: &Leg, c: &Ctx) -> Exit {
                     part,
                 };
             }
-            if p.part_frac > 0.0 && !part && d * (q - leg.part_px) >= 0.0 {
+            // A partial above (or at) the full target cannot execute first, even
+            // when one OHLC segment jumps over both resting limits.
+            if p.part_frac > 0.0 && d * (leg.tp - leg.part_px) > 0.0 && !part && d * (q - leg.part_px) >= 0.0 {
                 part = true;
             }
             // The target is a resting limit: it fills at its price.
@@ -351,13 +372,7 @@ pub fn simulate_secs(bars: &[Bar], secs: &[Sec], t: &Touch, p: &Params) -> Optio
         leg.zone = a.ext;
         leg.dens = a.dens;
         if a.limit {
-            let stopped = d * (exit_side(d, adverse(d, &s[a.k]), c.sp) - leg.stop) <= 0.0;
-            let first = stopped.then(|| Exit {
-                price: leg.stop - d * p.slippage,
-                time: s[a.k].time,
-                outcome: "sl",
-                part: false,
-            });
+            let first = fill_second_stop(d, &s[a.k], leg.stop, &c);
             (leg, a.k + 1, first)
         } else {
             (leg, a.k, None)
@@ -380,13 +395,7 @@ pub fn simulate_secs(bars: &[Bar], secs: &[Sec], t: &Touch, p: &Params) -> Optio
             s[k].time,
         )?;
         // The fill happened at the second's extreme: the same extreme may already be the stop.
-        let stopped = d * (exit_side(d, adverse(d, &s[k]), c.sp) - leg.stop) <= 0.0;
-        let first = stopped.then(|| Exit {
-            price: leg.stop - d * p.slippage,
-            time: s[k].time,
-            outcome: "sl",
-            part: false,
-        });
+        let first = fill_second_stop(d, &s[k], leg.stop, &c);
         (leg, k + 1, first)
     };
     let x1 = first.unwrap_or_else(|| manage(s, start, end, &leg, &c));
@@ -394,6 +403,7 @@ pub fn simulate_secs(bars: &[Bar], secs: &[Sec], t: &Touch, p: &Params) -> Optio
     let mut tr = Trade {
         entry_time: leg.entry_time,
         exit_time: x1.time + 1,
+        first_exit_time: x1.time + 1,
         dir: t.dir,
         entry: leg.entry,
         exit: x1.price,
@@ -497,6 +507,77 @@ mod tests {
             sl_atr: 0.5,
             tp_r: 2.0,
             ..Params::default()
+        }
+    }
+
+    #[test]
+    fn partial_at_or_above_full_target_never_executes_first() {
+        for d in [1.0, -1.0] {
+            for part_r in [1.0, 2.0] {
+                let p = Params {
+                    part_r,
+                    part_frac: 0.5,
+                    ..costless()
+                };
+                let c = Ctx {
+                    p: &p,
+                    sp: 0.0,
+                    atr: 1.0,
+                    level: 100.0,
+                    vbase: 1.0,
+                };
+                // Also covers a flip leg with a smaller full target than the
+                // shared partial setting: an OHLC jump reaches both prices.
+                let leg = Leg::new(&c, d, 100.0, 100.0 - d, 1.0, 0.0, 0).unwrap();
+                let s = if d > 0.0 {
+                    vec![sec(0, 100.0, 103.0, 99.9, 102.0, 0.1, 0.1)]
+                } else {
+                    vec![sec(0, 100.0, 100.1, 97.0, 98.0, 0.1, 0.1)]
+                };
+                let x = manage(&s, 0, 10, &leg, &c);
+                assert_eq!(x.outcome, "tp");
+                assert!(!x.part, "a partial cannot fill beyond the full exit");
+                assert!((leg.r(&x, &p) - 1.0).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn fill_second_gap_stops_use_adverse_open_for_long_and_short() {
+        let b = bars(40);
+        let t0 = 12 * 300;
+        for dir in [1, -1] {
+            let p = Params {
+                slippage: 0.1,
+                spread: 0.25,
+                ..costless()
+            };
+            let open = if dir > 0 { 98.0 } else { 102.0 };
+            let s = vec![sec(t0, open, open, open, open, 0.1, 0.1)];
+            let (tr, _) = simulate_secs(&b, &s, &touch(100.0, 100.0, dir), &p).unwrap();
+            let expected = if dir > 0 { 97.9 } else { 102.35 };
+            assert_eq!(tr.outcome, "sl");
+            assert!((tr.exit - expected).abs() < 1e-9);
+            assert!(tr.r < -4.0);
+            assert_eq!(tr.first_exit_time, t0 + 1);
+        }
+    }
+
+    #[test]
+    fn fill_second_intrasecond_stop_still_fills_at_stop() {
+        let p = costless();
+        let c = Ctx {
+            p: &p,
+            sp: 0.0,
+            atr: 1.0,
+            level: 100.0,
+            vbase: 1.0,
+        };
+        for d in [1.0, -1.0] {
+            let x = sec(0, 100.0, 102.0, 98.0, 100.0, 0.1, 0.1);
+            let stop = 100.0 - d * 0.5;
+            let exit = fill_second_stop(d, &x, stop, &c).unwrap();
+            assert_eq!(exit.price, stop);
         }
     }
 

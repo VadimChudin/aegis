@@ -1,6 +1,6 @@
 "use strict";
 
-// Bounce strategy panel: sliders and toggles with presets, backtest, genetic optimisation with
+// Bounce strategy panel: sliders and toggles with presets, backtest, AMALGAM multiobjective optimisation with
 // its checks, and chart overlays (expected entries with probability on the live chart; signals
 // and trades in the backtest view).
 (() => {
@@ -20,7 +20,7 @@
   const LIVE_EVERY_MS = 5 * 60 * 1000;
   const TABS = [
     ["backtest", "Backtest"],
-    ["ga", "Genetic algorithm"],
+    ["ga", "AMALGAM"],
     ["checks", "Checks"],
     ["compare", "Compare"],
   ];
@@ -29,11 +29,11 @@
     psr: ["Probabilistic Sharpe ≥ 0.95", "Probability that the true Sharpe ratio of these trades is above zero, given their number, skew and fat tails (Bailey & López de Prado 2012)."],
     t_daily: ["Daily t-statistic > 3", "Harvey & Liu: with many tested ideas, a real effect needs t > 3 on daily results."],
     fills: ["Limit fills", "The same trades when a limit fills on a touch, as set, and only when price trades $0.10 through it. The strictest rule must stay positive."],
-    dsr: ["Deflated Sharpe ≥ 0.95", "The chosen settings' Sharpe against the best Sharpe expected by luck from the number of settings the GA tried (Bailey & López de Prado 2014)."],
+    dsr: ["Deflated Sharpe ≥ 0.95", "The chosen settings' training Sharpe against chance across evaluated candidates; a diagnostic, not a profitability guarantee."],
     control: ["Levels beat random prices", "Same settings on levels moved to meaningless prices. If this fails, the edge comes from the conditions the model picks, not from the levels."],
     permutation: ["Metrics matter", "Same settings with the metrics shuffled between touches. The edge must disappear."],
-    pbo: ["Overfitting probability < 0.5", "Combinatorially symmetric cross-validation over the GA's final population (Bailey, Borwein, López de Prado & Zhu 2017)."],
-    ga_vs_random: ["GA beats random search", "Out of sample, the GA's settings against random search with the same number of evaluations in every window."],
+    pbo: ["Overfitting probability < 0.5", "Diagnostic cross-validation of the final candidate pool, not proof against the complete adaptive search history."],
+    ga_vs_random: ["AMALGAM versus random search", "Out-of-sample diagnostic against random search; inspect candidate selection policy and evaluation budgets."],
   };
 
   const B = {
@@ -396,7 +396,7 @@
       ${tableHtml(t("By month"), r.by_month)}${tableHtml(t("By session"), r.by_session)}${tableHtml(t("By level kind"), r.by_kind, kinds)}${tradesHtml(r.trades, "backtest")}`;
   }
 
-  // ---- tab: genetic algorithm ------------------------------------------------------------------
+  // ---- tab: AMALGAM optimisation ------------------------------------------------------------------
 
   const GA_FIELDS = [
     // 0 switches a target off; the win-rate target alone pushes the GA to tiny targets that lose.
@@ -404,7 +404,6 @@
     ["target_trades_per_day", "Target trades per day", 0, 100, 1, 0],
     ["population", "Population", 16, 128, 8, 0],
     ["generations", "Generations", 5, 100, 1, 0],
-    ["patience", "Stop after generations without progress", 3, 30, 1, 0],
     ["train_days", "Train window, days", 30, 120, 5, 0],
     ["test_days", "Test window, days", 7, 60, 1, 0],
     ["min_trades", "Min trades in a train window", 10, 300, 10, 0],
@@ -426,10 +425,10 @@
         return `<label class="bt-chk${noData ? " nodata" : ""}"><input type="checkbox" data-gametric="${esc(f.id)}" ${on ? "checked" : ""}> ${esc(t(f.label))}</label>`;
       })
       .join("");
-    return `${group("GA settings", rows, t("GA settings"))}${group(
-      "GA metrics",
-      `<p class="hint">${esc(t("Metric filters the GA may switch on and set. Fewer metrics = less room to overfit."))}</p><div class="bt-chks">${metrics}</div>`,
-      t("Metrics the GA may use"),
+    return `<p class="hint">${esc(t("AMALGAM searches a training Pareto front. Validation selects parameters; test data never selects them. Passing checks does not guarantee profit."))}</p>${group("AMALGAM settings", rows, t("AMALGAM settings"))}${group(
+      "AMALGAM metrics",
+      `<p class="hint">${esc(t("Metric filters AMALGAM may use. Fewer metrics reduce overfitting risk."))}</p><div class="bt-chks">${metrics}</div>`,
+      t("Metrics AMALGAM may use"),
     )}`;
   }
 
@@ -439,7 +438,6 @@
       [
         { label: t("Best (train)"), color: css("--pos"), points: f("best") },
         { label: t("Population mean"), color: css("--muted"), points: f("mean") },
-        { label: t("Best on validation"), color: css("--apple"), points: f("validation") },
       ],
       { h: 110 },
     );
@@ -491,26 +489,27 @@
       }
     }
     return rows.length
-      ? `<div class="bt-table"><div class="bt-sub">${esc(t("What the GA changed"))}</div><table><tr><th></th><th>${esc(t("Now"))}</th><th>GA</th></tr>${rows.join("")}</table></div>`
-      : `<p class="hint">${esc(t("The GA kept your settings."))}</p>`;
+      ? `<div class="bt-table"><div class="bt-sub">${esc(t("What AMALGAM changed"))}</div><table><tr><th></th><th>${esc(t("Now"))}</th><th>AMALGAM</th></tr>${rows.join("")}</table></div>`
+      : `<p class="hint">${esc(t("AMALGAM kept your settings."))}</p>`;
   }
 
   function gaHtml() {
     const run = `<div class="bt-run"><button type="button" class="cta" id="btOptimize" ${B.running ? "disabled" : ""}>${esc(
-      t(B.running === "ga" ? "Running…" : "Run genetic algorithm"),
-    )}</button><span class="hint">${esc(t("Walk-forward: the GA tunes on each train window, the next window tests it."))}</span></div>`;
+      t(B.running === "ga" ? "Running…" : "Run AMALGAM"),
+    )}</button><span class="hint">${esc(t("Walk-forward: AMALGAM searches training data, validation selects, and the next window tests."))}</span></div>`;
     const head = run + gaSpecHtml();
     if (B.running === "ga") return `${head}<div class="bt-progress"><div class="bar" id="btGaBar"></div></div>${spinner()}`;
     const o = B.opt;
     if (!o) {
       return `${head}<p class="hint">${esc(
         t(
-          "The GA evolves a population of settings (tournament selection, SBX crossover, polynomial mutation, elitism). Each window is split into train and validation; early stopping and the final choice use validation and the fitness of nearby settings. The honest number is the out-of-sample result of the test windows. A random search with the same budget runs next to it, and the checks tab reports the overfitting statistics.",
+          "AMALGAM combines genetic, differential evolution, particle swarm and adaptive Metropolis-style proposals. Training-only Pareto selection adapts their allocation. The generation budget is fixed; validation selects the final parameters and test data never selects them. Results remain subject to execution assumptions and statistical uncertainty.",
         ),
       )}</p>`;
     }
     const r = o.report;
     const ro = r.baseline.random_out_of_sample;
+    const diagnostics = `<p class="hint">${esc(r.backend || "legacy")} · Pareto: ${(r.pareto || []).length}</p><div class="bt-table"><table><tr><th>Operator</th><th>Proposed</th><th>Survived</th><th>Allocation</th></tr>${(r.operator_stats || []).map((op) => `<tr><td>${esc(op.name)}</td><td>${Number(op.proposed)}</td><td>${Number(op.survived)}</td><td>${Number(op.allocation)}</td></tr>`).join("")}</table></div>`;
     const windows = r.windows
       .map(
         (w) =>
@@ -519,9 +518,9 @@
           }">${w.test.trades} · ${pct(w.test.win_rate)} · ${num(w.test.avg_r, 3)}</td><td>${w.generations}</td></tr>`,
       )
       .join("");
-    return `${head}
-      <div class="bt-sub">${esc(t("Out of sample (test windows the GA never saw)"))}</div>${statsHtml(r.out_of_sample)}
-      ${equity(r.oos_trades.map((x, i, arr) => [x.exit_time, arr.slice(0, i + 1).reduce((a, y) => a + y.r, 0)]))}
+    return `${head}${diagnostics}
+      <div class="bt-sub">${esc(t("Out of sample (test windows AMALGAM never selected on)"))}</div>${statsHtml(r.out_of_sample)}
+      ${equity([...r.oos_trades].sort((a, b) => a.exit_time - b.exit_time).map((x, i, arr) => [x.exit_time, arr.slice(0, i + 1).reduce((a, y) => a + y.r, 0)]))}
       <div class="bt-btns"><button type="button" class="cta" id="btApply">${esc(t("Apply to sliders"))}</button>
         <button type="button" class="ghost sm" data-show="oos">${esc(t("Show out-of-sample trades on chart"))}</button></div>
       <p class="hint">${esc(
@@ -533,7 +532,7 @@
           r: num(ro.avg_r, 3),
         }),
       )}</p>
-      <div class="bt-sub">${esc(t("Convergence of the latest GA run"))}</div>${convergenceHtml(r.convergence)}
+      <div class="bt-sub">${esc(t("Convergence of the latest AMALGAM run"))}</div>${convergenceHtml(r.convergence)}
       <div class="bt-table"><div class="bt-sub">${esc(t("Walk-forward windows"))}</div><table><tr><th>${esc(t("Test from"))}</th><th>${esc(t("Train"))}</th><th>${esc(
         t("Test"),
       )}</th><th>${esc(t("Gen."))}</th></tr>${windows}</table></div>
@@ -558,11 +557,11 @@
     const cols = [];
     if (B.result) cols.push([t("Your settings (backtest)"), B.result.report.stats]);
     if (B.opt) {
-      cols.push([t("GA, out of sample"), B.opt.report.out_of_sample]);
+      cols.push([t("AMALGAM, out of sample"), B.opt.report.out_of_sample]);
       cols.push([t("Random search, out of sample"), B.opt.report.baseline.random_out_of_sample]);
-      cols.push([t("GA settings, full backtest"), B.opt.backtest.stats]);
+      cols.push([t("AMALGAM settings, full backtest"), B.opt.backtest.stats]);
     }
-    if (!cols.length) return `<p class="hint">${esc(t("Run a backtest and the genetic algorithm to compare them."))}</p>`;
+    if (!cols.length) return `<p class="hint">${esc(t("Run a backtest and AMALGAM to compare them."))}</p>`;
     const rows = [
       ["Trades", (s) => s.trades],
       ["Trades per day", (s) => num(s.trades_per_day, 1)],
@@ -577,7 +576,7 @@
       .join("");
     return `<div class="bt-table"><table><tr><th></th>${cols.map(([h]) => `<th>${esc(h)}</th>`).join("")}</tr>${rows}</table></div>
       <p class="hint">${esc(
-        t("The full backtest of the GA settings includes the months they were chosen on, so it is optimistic. Compare decisions on the out-of-sample columns."),
+        t("The full backtest of the AMALGAM settings includes the months they were chosen on, so it is optimistic. Compare decisions on the out-of-sample columns."),
       )}</p>`;
   }
 
@@ -755,7 +754,7 @@
       B.opt = await invoke("bounce_optimize", { params: B.params, spec: B.spec });
       const s = B.opt.report.out_of_sample;
       log(
-        t("Genetic algorithm: out of sample {n} trades, win {w}, avg {r} R, {d} per day ({e} evaluations)", {
+        t("AMALGAM: out of sample {n} trades, win {w}, avg {r} R, {d} per day ({e} evaluations)", {
           n: s.trades,
           w: pct(s.win_rate),
           r: num(s.avg_r, 3),
@@ -771,7 +770,7 @@
     if (!B.opt) return;
     B.params = clone(B.opt.report.params);
     save();
-    log(t("GA settings applied to the sliders."), "ok");
+    log(t("AMALGAM settings applied to the sliders."), "ok");
     render();
   }
 
@@ -845,7 +844,7 @@
     const total = trades.reduce((a, x) => a + x.r, 0);
     $("btBar").hidden = false;
     $("btBarText").textContent = t("{what} · Binance XAUUSDT 5m · {n} trades · win {w} · {r} R", {
-      what: t(source === "oos" ? "GA out of sample" : "Backtest"),
+      what: t(source === "oos" ? "AMALGAM out of sample" : "Backtest"),
       n: trades.length,
       w: pct(trades.length ? wins / trades.length : NaN),
       r: num(total, 1),

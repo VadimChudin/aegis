@@ -184,19 +184,41 @@ pub fn pbo(perf: &[Vec<(f64, f64, f64)>]) -> (f64, f64, usize) {
 }
 
 /// 95% stationary-bootstrap intervals over days: (win rate, mean R per trade, trades per day).
+/// Compatibility wrapper: infer the calendar span from the first and last trade. Call
+/// `bootstrap_range` when the observation window (including its empty edges) is known.
 pub fn bootstrap(trades: &[Trade], reps: usize, mean_block: f64, seed: u64) -> [(f64, f64); 3] {
-    use std::collections::BTreeMap;
-    let mut days: BTreeMap<i64, (f64, f64, f64)> = BTreeMap::new();
-    for t in trades {
-        let d = days.entry(t.entry_time.div_euclid(86_400)).or_default();
+    let Some(from) = trades.iter().map(|t| t.entry_time).min() else {
+        return [(f64::NAN, f64::NAN); 3];
+    };
+    let to = trades.iter().map(|t| t.entry_time).max().unwrap().saturating_add(1);
+    bootstrap_range(trades, from, to, reps, mean_block, seed)
+}
+
+/// Resample calendar days in `[from, to)`, including days with no trades. R and win-rate
+/// estimates are ratios of resampled totals, not unweighted averages of daily trade means.
+/// Zero-trade replicates contribute 0 to trades/day; their per-trade ratios are undefined.
+pub fn bootstrap_range(
+    trades: &[Trade],
+    from: i64,
+    to: i64,
+    reps: usize,
+    mean_block: f64,
+    seed: u64,
+) -> [(f64, f64); 3] {
+    if to <= from {
+        return [(f64::NAN, f64::NAN); 3];
+    }
+    let d0 = from.div_euclid(86_400);
+    let n = ((to - 1).div_euclid(86_400) - d0 + 1) as usize;
+    if n < 5 || reps == 0 {
+        return [(f64::NAN, f64::NAN); 3];
+    }
+    let mut days = vec![(0.0, 0.0, 0.0); n];
+    for t in trades.iter().filter(|t| t.entry_time >= from && t.entry_time < to) {
+        let d = &mut days[(t.entry_time.div_euclid(86_400) - d0) as usize];
         d.0 += 1.0;
         d.1 += f64::from(u8::from(t.r > 0.0));
         d.2 += t.r;
-    }
-    let days: Vec<(f64, f64, f64)> = days.into_values().collect();
-    let n = days.len();
-    if n < 5 {
-        return [(f64::NAN, f64::NAN); 3];
     }
     let mut rng = Rng::new(seed);
     let p = 1.0 / mean_block.max(1.0);
@@ -211,15 +233,18 @@ pub fn bootstrap(trades: &[Trade], reps: usize, mean_block: f64, seed: u64) -> [
             sum += d.2;
             i = if rng.u() < p { rng.below(n) } else { (i + 1) % n };
         }
+        pd.push(cnt / n as f64);
         if cnt > 0.0 {
             wr.push(wins / cnt);
             mr.push(sum / cnt);
-            pd.push(cnt / n as f64);
         }
     }
     let ci = |v: &mut Vec<f64>| {
         v.sort_by(f64::total_cmp);
         let k = v.len();
+        if k == 0 {
+            return (f64::NAN, f64::NAN);
+        }
         (v[k * 25 / 1000], v[(k * 975 / 1000).min(k - 1)])
     };
     [ci(&mut wr), ci(&mut mr), ci(&mut pd)]
@@ -348,6 +373,37 @@ fn scored_range(e: &Engine, p: &Params) -> (usize, usize) {
     (from, e.bars.len())
 }
 
+// Keep the selection horizon identical to ga::split / trial evaluation, including the
+// last train bar's duration rather than the next bar's timestamp (there may be a gap).
+fn selection_train_range(recent: (usize, usize)) -> (usize, usize) {
+    let (a, z) = recent;
+    (a, a + (z - a) * 3 / 4)
+}
+
+fn comparison_check(
+    id: &'static str,
+    observed: usize,
+    null: usize,
+    p_value: f64,
+    optimized: bool,
+    value: String,
+) -> Check {
+    let limitation = if optimized {
+        "; inconclusive diagnostic: fold-specific optimized settings unavailable; fixed settings are not a matched OOS comparison"
+    } else if observed < 30 || null < 30 {
+        "; inconclusive: fewer than 30 trades in observed or control sample"
+    } else if !p_value.is_finite() {
+        "; inconclusive: comparison statistic undefined"
+    } else {
+        ""
+    };
+    Check {
+        id,
+        pass: !optimized && observed >= 30 && null >= 30 && p_value.is_finite() && p_value < 0.01,
+        value: format!("{value}{limitation}"),
+    }
+}
+
 /// Checks for settings: `opt` adds the GA-specific ones (DSR over its trials, PBO, baseline).
 pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validation {
     let (from, to) = scored_range(e, p);
@@ -373,11 +429,9 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
     // were chosen on, against the expected maximum daily Sharpe of the trials evaluated there.
     let (dsr, selected, sr0, n_trials) = match opt {
         Some(o) => {
-            let (a, z) = o.recent;
+            let (a, z) = selection_train_range(o.recent);
             let (ta, tz) = (e.bars[a].time, e.bars[z - 1].time + 300);
-            let train_end = e.bars[a + (z - a) * 3 / 4].time;
-            let sel = daily_r(&e.trades(&o.params, a, z), ta, tz);
-            let _ = train_end;
+            let sel = daily_r(&e.training_trades(&o.params, a, z), ta, tz);
             let (m, sd, sk, ku) = moments(&sel);
             let sr = if sd > 0.0 { m / sd } else { 0.0 };
             let valid: Vec<&Trial> = o.trials.iter().filter(|t| t.trades >= o.objective.min_trades).collect();
@@ -390,7 +444,7 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
                 .final_population
                 .iter()
                 .take(30)
-                .map(|c| daily_r(&e.trades(c, a, z), ta, tz))
+                .map(|c| daily_r(&e.training_trades(c, a, z), ta, tz))
                 .collect();
             let rho = mean_correlation(&series);
             let n_eff = (rho + (1.0 - rho) * valid.len() as f64).round().max(1.0) as usize;
@@ -413,7 +467,10 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
         pool.truncate(40);
         configs = pool.len();
         let blocks = 10usize;
-        let edges: Vec<usize> = (0..=blocks).map(|b| from + (to - from) * b / blocks).collect();
+        let (pbo_from, pbo_to) = selection_train_range(o.recent);
+        let edges: Vec<usize> = (0..=blocks)
+            .map(|b| pbo_from + (pbo_to - pbo_from) * b / blocks)
+            .collect();
         let perf: Vec<Vec<(f64, f64, f64)>> = pool
             .iter()
             .map(|c| {
@@ -428,12 +485,14 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
         (pbo_v, pbo_loss, combos) = pbo(&perf);
     }
 
-    let [bwr, bmr, bpd] = bootstrap(&trades, 2000, 5.0, 11);
-    // Control and permutation over the same period as the checked trades.
+    let [bwr, bmr, bpd] = bootstrap_range(&trades, st_from, st_to, 2000, 5.0, 11);
+    // Optimized OOS trades use per-fold settings, which OptimizeReport does not retain.
+    // These fixed-setting controls are diagnostics only, not matched OOS comparisons.
+    let diagnostic_params = opt.map_or(p, |o| &o.params);
     let window = |eng: &Engine| {
         let (a, z) = (eng.index_at(st_from), eng.index_at(st_to).max(1));
         let a = a.min(z - 1);
-        let t = eng.trades(p, a, z);
+        let t = eng.trades(diagnostic_params, a, z);
         let r: Vec<f64> = t.iter().map(|x| x.r).collect();
         (stats(&t, st_from, st_to), r)
     };
@@ -505,10 +564,13 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
             pass: dsr >= 0.95,
             value: format!("{dsr:.3} (SR {selected:.3} vs SR0 {sr0:.3}, N={n_trials})"),
         },
-        Check {
-            id: "control",
-            pass: p_control < 0.01,
-            value: format!(
+        comparison_check(
+            "control",
+            st.trades,
+            control.trades,
+            p_control,
+            opt.is_some(),
+            format!(
                 "{:+.3} R vs {:+.3} R on random levels (p={:.1e}); win {:.1}% vs {:.1}%",
                 st.avg_r,
                 control.avg_r,
@@ -516,15 +578,18 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
                 100.0 * st.win_rate,
                 100.0 * control.win_rate
             ),
-        },
-        Check {
-            id: "permutation",
-            pass: permuted.trades < 30 || p_perm < 0.01,
-            value: format!(
+        ),
+        comparison_check(
+            "permutation",
+            st.trades,
+            permuted.trades,
+            p_perm,
+            opt.is_some(),
+            format!(
                 "{:+.3} R vs {:+.3} R with shuffled metrics (p={:.1e}), {} trades",
                 st.avg_r, permuted.avg_r, p_perm, permuted.trades
             ),
-        },
+        ),
     ];
     if let Some(o) = opt {
         checks.push(Check {
@@ -538,7 +603,7 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
             id: "ga_vs_random",
             pass: t(&o.out_of_sample) >= t(ro),
             value: format!(
-                "out of sample: GA {:+.3} R × {} (t={:.1}) vs random search {:+.3} R × {} (t={:.1})",
+                "out of sample: AMALGAM {:+.3} R × {} (t={:.1}) vs random search {:+.3} R × {} (t={:.1})",
                 o.out_of_sample.avg_r,
                 o.out_of_sample.trades,
                 t(&o.out_of_sample),
@@ -584,6 +649,110 @@ pub type SharedBars = Arc<Vec<super::bar::Bar>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trade(time: i64, r: f64) -> Trade {
+        Trade {
+            entry_time: time,
+            r,
+            ..Trade::empty()
+        }
+    }
+
+    #[test]
+    fn selected_dsr_uses_trial_train_split() {
+        assert_eq!(selection_train_range((0, 100)), (0, 75));
+        assert_eq!(selection_train_range((10, 31)), (10, 25));
+        // A spectacular holdout cannot affect the selected training series.
+        let (a, z) = selection_train_range((0, 8));
+        let trades = [trade(0, 1.0), trade(5 * 86_400, -1.0), trade(6 * 86_400, 1000.0)];
+        let train: Vec<_> = trades
+            .iter()
+            .filter(|t| t.entry_time < z as i64 * 86_400)
+            .cloned()
+            .collect();
+        let series = daily_r(&train, a as i64 * 86_400, z as i64 * 86_400);
+        assert_eq!(series, vec![1.0, 0.0, 0.0, 0.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn bootstrap_calendar_days_and_trade_weighting() {
+        let mut trades = vec![trade(0, -1.0); 9];
+        trades.extend((1..5).map(|d| trade(d * 86_400, 1.0)));
+        // No block restarts: each replicate contains every calendar day exactly once.
+        let [wr, mr, pd] = bootstrap_range(&trades, 0, 5 * 86_400, 100, 1e300, 11);
+        assert_eq!(wr, (4.0 / 13.0, 4.0 / 13.0));
+        assert_eq!(mr, (-5.0 / 13.0, -5.0 / 13.0));
+        assert_eq!(pd, (13.0 / 5.0, 13.0 / 5.0));
+        // Empty edges belong to the observation interval as well.
+        let [_, mr, pd] = bootstrap_range(&trades, -2 * 86_400, 8 * 86_400, 100, 1e300, 11);
+        assert_eq!(mr, (-5.0 / 13.0, -5.0 / 13.0));
+        assert_eq!(pd, (1.3, 1.3));
+    }
+
+    #[test]
+    fn bootstrap_sparse_days_include_zero_trade_replicates() {
+        let trades = vec![trade(0, 2.0)];
+        let [wr, mr, pd] = bootstrap_range(&trades, 0, 10 * 86_400, 2000, 1.0, 11);
+        assert_eq!(wr, (1.0, 1.0));
+        assert_eq!(mr, (2.0, 2.0));
+        assert_eq!(pd.0, 0.0);
+        assert!(pd.1 > 0.0 && pd.1 < 1.0);
+    }
+
+    #[test]
+    fn bootstrap_empty_and_zero_repetitions_are_safe() {
+        let [wr, mr, pd] = bootstrap_range(&[], 0, 10 * 86_400, 50, 5.0, 11);
+        assert!(wr.0.is_nan() && mr.0.is_nan());
+        assert_eq!(pd, (0.0, 0.0));
+        for intervals in [
+            bootstrap(&[], 50, 5.0, 11),
+            bootstrap_range(&[], 0, 10 * 86_400, 0, 5.0, 11),
+        ] {
+            assert!(intervals.iter().all(|(lo, hi)| lo.is_nan() && hi.is_nan()));
+        }
+    }
+
+    #[test]
+    fn bootstrap_half_open_window_and_compatibility_span() {
+        let trades = vec![
+            trade(99, 100.0),
+            trade(100, 1.0),
+            trade(5 * 86_400 - 1, 1.0),
+            trade(5 * 86_400, 100.0),
+        ];
+        let [wr, mr, pd] = bootstrap_range(&trades, 100, 5 * 86_400, 20, 1e300, 11);
+        assert_eq!(wr, (1.0, 1.0));
+        assert_eq!(mr, (1.0, 1.0));
+        assert_eq!(pd, (0.4, 0.4));
+        let sparse = vec![trade(0, 1.0), trade(9 * 86_400, 1.0)];
+        assert_eq!(bootstrap(&sparse, 20, 1e300, 11)[2], (0.2, 0.2));
+    }
+
+    #[test]
+    fn low_n_permutation_never_auto_passes() {
+        for (observed, null) in [(100, 0), (100, 29), (29, 100)] {
+            let check = comparison_check("permutation", observed, null, 0.0, false, "test".into());
+            assert!(!check.pass);
+            assert!(check.value.contains("inconclusive"));
+        }
+        assert!(comparison_check("permutation", 30, 30, 0.001, false, "test".into()).pass);
+        assert!(!comparison_check("permutation", 30, 30, f64::NAN, false, "test".into()).pass);
+        assert!(!comparison_check("permutation", 30, 30, 0.01, false, "test".into()).pass);
+    }
+
+    #[test]
+    fn optimized_controls_are_diagnostics_with_unchanged_check_serde() {
+        for id in ["control", "permutation"] {
+            let check = comparison_check(id, 100, 100, 0.0, true, "test".into());
+            assert!(!check.pass);
+            assert!(check.value.contains("fold-specific optimized settings unavailable"));
+            let json = serde_json::to_value(&check).unwrap();
+            assert_eq!(json.as_object().unwrap().len(), 3);
+            assert_eq!(json["id"], id);
+            assert_eq!(json["pass"], false);
+            assert!(json["value"].as_str().unwrap().contains("not a matched OOS comparison"));
+        }
+    }
 
     #[test]
     fn normal_functions() {
