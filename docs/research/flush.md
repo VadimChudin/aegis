@@ -20,6 +20,8 @@ python -m aegis_lab.research.flush extract                     # 1-second rows, 
 python -m aegis_lab.research.flush report                      # all tables below, ~3 min
 python -m aegis_lab.research.flush_bounce                      # "is there always a small bounce?"
 python -m aegis_lab.research.flush_sim                         # grid, partial exits, trailing
+python -m aegis_lab.research.flush_signs                       # wide search for traces (~25 min)
+python -m aegis_lab.research.flush_maker                       # limit-order execution of the signal
 ```
 
 ## Events
@@ -137,3 +139,71 @@ takes a close target, but the rare full-grid stop-outs cost more; it does not ma
 positive. The best combination does the same from random seconds. Grid, partial exits and
 trailing change the shape of the results, not the sign: they cannot create an edge that the
 entry does not have.
+
+## Wide search: do algorithms leave traces? (`flush_signs.py`, `flush_maker.py`)
+
+The event studies above ask "after a drop, what next?". The opposite approach: every 5th open
+second (2.2 M samples, 7 months), 50 causal features — book depth and imbalance at $0.5 / $1 /
+$2 / $5, depth vs its 1 h mean, added / eaten / pulled flows, aggressor delta and volume,
+absorption (net aggression per $ of move), largest trades, position in the 30 min / 4 h range,
+time spent at the price in the last 4 h (volume-profile node), VWAP, the Binance tape and price as
+a lead, news, time — against the mid 5 s, 30 s, 2 min, 10 min and 30 min ahead. Walk-forward by
+month, linear (ridge) and non-linear (LightGBM).
+
+**Harness check first.** Planting ±0.5 bp on the 2-min move after a real book state (imbalance
+top / bottom decile) raises the out-of-sample result from +0.65 to +1.26 bp per trade; shuffled
+targets give IC 0.000. The pipeline finds an edge of that size when it exists. (The first version
+of this check measured trades on real quotes instead of the planted target, so it could not see
+the plant; fixed. Real-data results were not affected.)
+
+**Traces exist, and they are strong at the scale of seconds.** Rank correlation with the move
+ahead, first / second half:
+
+| Feature | 5 s | 30 s | 2 min | 10 min |
+|---|---|---|---|---|
+| Book imbalance within $0.5 | +0.26 / +0.25 | +0.20 / +0.12 | +0.10 / +0.06 | +0.04 / +0.02 |
+| Bid depth within $1 vs its 1 h mean | +0.22 / +0.19 | +0.17 / +0.10 | +0.09 / +0.05 | +0.04 / +0.02 |
+| Imbalance change over 60 s | +0.19 / +0.18 | +0.15 / +0.09 | +0.08 / +0.04 | +0.04 / +0.02 |
+| Binance moved more than Bybit in the last 10 s | +0.19 / +0.16 | +0.13 / +0.09 | +0.07 / +0.05 | +0.03 / +0.02 |
+| Net bid refill in the last 10 s | +0.17 / +0.10 | +0.12 / +0.04 | +0.06 / +0.02 | +0.02 / +0.01 |
+| Aggressor delta, last 10 s | +0.08 / +0.06 | +0.05 / +0.02 | +0.02 / +0.01 | 0 |
+
+Everything slower — volume spikes, absorption, big trades, range position, volume nodes, VWAP,
+news, hour — is below 0.03. Out of sample, every month positive:
+
+| Ridge, top / bottom 0.5% | OOS IC | Trades | Gross bp | t | Net, Bybit taker (11 bp) | Net at CFD $0.25 |
+|---|---|---|---|---|---|---|
+| 5 s | 0.27 | 441 | **+1.16** | 9.7 | −9.9 | +0.61 |
+| 30 s | 0.16 | 508 | **+1.54** | 6.9 | −9.5 | +0.99 |
+| 2 min | 0.08 | 781 | +0.75 | 2.1 | −10.3 | +0.20 |
+| 10 min | 0.03 | 971 | +0.47 | 0.9 | −10.6 | −0.08 |
+| 30 min | 0.00 | 527 | −1.6 | −1.3 | | |
+
+LightGBM matches the IC and is no better in trades; interactions add nothing to the linear book
+signal. The edge is ~$0.5-0.7 per oz per trade and decays within minutes.
+
+**It is local to Bybit.** The same Bybit features predict the *Binance* price with IC 0.09 at
+5 s and 0.03 at 30 s, +0.2 bp per trade: most of the signal is Bybit's own quote catching up, not
+the global gold price, so it does not carry over to a CFD at RoboForex.
+
+**Limit orders do not rescue it** (`flush_maker.py`). With the current TradFi discount (maker 0%,
+taker 0.0275%, per Bybit Learn, Aug 2026), a limit buy at the bid on a buy signal, filled only
+when a trade prints through it:
+
+| 30 s signal, top / bottom 0.5%, wait 30 s | Filled | Signal move, filled | …not filled | Round trip before fees, limit exit |
+|---|---|---|---|---|
+| | 53% | −0.57 bp | **+2.76 bp** | −1.14 bp |
+
+The fill happens exactly when the signal is wrong: the trades that would have won run away from
+the resting order. Limit in and out loses ~0.8-1.2 bp before fees in every variant (5 / 30 s,
+0.5 / 2% signals, touch or trade-through fills). This trace is the market makers' own edge;
+capturing it needs queue priority and latency, not a better rule.
+
+**At the "bottom".** Seconds at a fresh 30-min low after a ≥ 0.2% drop (58 848): the next 5 s
+continue down (30% up), the next 10 min drift +0.41 bp vs −0.14 bp elsewhere (52.7% up). What
+separates turning lows, same sign in both halves (IC with the 10-min move): the low is in fresh
+territory (little time spent at this price in 4 h, −0.09 / −0.07), far below the 1 h VWAP
+(−0.07 / −0.06), a deep drop from the 4 h high (+0.05 / +0.10), bids thicker than usual
+(+0.05 / +0.05), a large buy trade in the last minute (+0.04 / +0.05), bids eaten rather than
+pulled (+0.03 / +0.04). These are the signs the eye looks for, and they are real, but the best
+out-of-sample model quintile at the low gets +0.67 bp against +0.41 bp for the worst.
