@@ -18,6 +18,7 @@
     settings: null, // PublicSettings
     sessions: {}, // broker id → AccountSummary
     reports: {}, // broker id → last ConnectReport of this run
+    connectErrors: {},
     bars: [],
     busy: {},
     openCard: null,
@@ -354,27 +355,32 @@
     await refreshSessions();
     S.settings = await invoke("settings_get");
     renderChartChrome();
-    if (S.panel === "brokers") renderBrokersPanel(id);
+    if (S.panel === "brokers") renderBrokersPanel(report?.connected ? id : undefined);
     await ensureChart();
   }
 
   async function connectSaved(id) {
+    delete S.connectErrors[id];
     S.busy[id] = true;
     renderChartChrome();
     let report = null;
     try {
       report = await invoke("broker_connect_saved", { broker: id });
     } catch (err) {
+      S.connectErrors[id] = String(err);
       log(`${S.infos[id].name}: ${err}`, "bad");
     }
     await afterConnect(id, report);
   }
 
   async function connectForm(id) {
+    if (S.busy[id]) return;
     const card = document.querySelector(`.broker-card[data-broker="${id}"]`);
     const form = {};
     card.querySelectorAll("input[data-key]").forEach((i) => (form[i.dataset.key] = i.value.trim()));
     const autoConnect = card.querySelector(".toggle").classList.contains("on");
+    delete S.connectErrors[id];
+    card.querySelector(".connect-error")?.remove();
     S.busy[id] = true;
     renderChartChrome();
     const button = card.querySelector(".act-connect");
@@ -384,6 +390,7 @@
     try {
       report = await invoke("broker_connect", { broker: id, form, autoConnect });
     } catch (err) {
+      S.connectErrors[id] = String(err);
       log(`${S.infos[id].name}: ${err}`, "bad");
     }
     await afterConnect(id, report);
@@ -391,6 +398,7 @@
 
   async function disconnect(id, forget) {
     S.settings = await invoke("broker_disconnect", { broker: id, forget });
+    delete S.connectErrors[id];
     if (forget) delete S.reports[id];
     log(`${S.infos[id].name} ${forget ? "disconnected, credentials removed" : "disconnected"}`);
     await refreshSessions();
@@ -538,7 +546,7 @@
             ${connected ? `<button type="button" class="ghost act-disconnect">${esc(t("Disconnect"))}</button>` : ""}
             ${hasSaved ? `<button type="button" class="ghost danger act-forget">${esc(t("Forget"))}</button>` : ""}
           </div>
-          <div class="checks">${checksHtml(report, connected)}</div>
+          <div class="checks">${S.connectErrors[id] ? `<p class="connect-error chk chk-fail" role="alert">${esc(S.connectErrors[id])}</p>` : ""}${checksHtml(report, connected)}</div>
         </div>
       </section>`;
   }

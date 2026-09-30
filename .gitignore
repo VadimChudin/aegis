@@ -1,5 +1,7 @@
 /target/
 app/node_modules/
+app/test-results/
+app/playwright-report/
 app/src-tauri/gen/
 /shots/
 __pycache__/
