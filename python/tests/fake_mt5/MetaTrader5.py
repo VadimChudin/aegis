@@ -10,9 +10,16 @@ from types import SimpleNamespace
 __version__ = "5.0.5120"
 
 TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 1, 5, 15, 16385, 16388, 16408
+BOOK_TYPE_BUY, BOOK_TYPE_SELL, BOOK_TYPE_BUY_MARKET, BOOK_TYPE_SELL_MARKET = 1, 2, 3, 4
 SERVER_OFFSET = 3 * 3600
 
-_state = {"logged_in": False, "error": (1, "Success")}
+_state = {
+    "logged_in": False,
+    "error": (1, "Success"),
+    "book_supported": True,
+    "book": None,
+    "book_releases": 0,
+}
 
 
 def initialize(path=None, login=None, password=None, server=None, timeout=None):
@@ -67,3 +74,29 @@ def copy_rates_from_pos(symbol, timeframe, start, count):
          "tick_volume": 100 + i, "spread": 30, "real_volume": 0}
         for i in range(count)
     ]
+
+
+def market_book_add(symbol):
+    if not _state["logged_in"] or not _state["book_supported"] or symbol != "XAUUSD.r":
+        _state["error"] = (-1, "Market depth is not supported")
+        return False
+    return True
+
+
+def market_book_get(symbol):
+    if _state["book"] is not None:
+        return _state["book"]
+    from collections import namedtuple
+
+    BookInfo = namedtuple("BookInfo", "type price volume volume_dbl")
+    return (
+        BookInfo(BOOK_TYPE_BUY, 4293.0, 2, 2.0),
+        BookInfo(BOOK_TYPE_BUY, 4292.0, 3, 3.5),
+        BookInfo(BOOK_TYPE_SELL, 4294.0, 4, 4.0),
+        BookInfo(BOOK_TYPE_SELL, 4295.0, 5, 5.0),
+    )
+
+
+def market_book_release(symbol):
+    _state["book_releases"] += 1
+    return True

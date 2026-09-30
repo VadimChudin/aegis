@@ -4,7 +4,9 @@
 pub mod bounce;
 pub mod broker;
 pub mod checks;
+pub mod density;
 pub mod market;
+pub mod market_depth;
 pub mod settings;
 pub mod strategy;
 
@@ -19,4 +21,5 @@ pub use broker::{
 };
 pub use checks::{Check, CheckStatus};
 pub use market::{Candle, Timeframe};
+pub use market_depth::{BookLevel, DepthLevel, OrderBook, OrderBookSnapshot};
 pub use settings::{PublicSettings, SettingsStore};

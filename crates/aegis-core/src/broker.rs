@@ -8,6 +8,7 @@ use crate::{
     bybit::Bybit,
     checks::{Check, Checklist},
     market::{Candle, Timeframe},
+    market_depth::OrderBookSnapshot,
     mt5::Mt5Bridge,
     sign::now_ms,
 };
@@ -420,6 +421,15 @@ impl Connector {
             Connector::Binance(c) => c.candles(timeframe, limit).await,
             Connector::Bybit(c) => c.candles(timeframe, limit).await,
             Connector::Roboforex(c) => c.candles(timeframe, limit).await,
+        }
+    }
+
+    /// Returns a validated point-in-time market-depth snapshot for the connected symbol.
+    pub async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
+        match self {
+            Connector::Binance(c) => c.order_book().await,
+            Connector::Bybit(c) => c.order_book().await,
+            Connector::Roboforex(c) => c.order_book().await,
         }
     }
 

@@ -162,6 +162,49 @@ class Bridge:
             for r in rates
         ]
 
+    def order_book(self, _req):
+        if not self.symbol:
+            raise BridgeError("not connected")
+        mt5 = self.mt5()
+        if not mt5.market_book_add(self.symbol):
+            code, message = mt5.last_error()
+            raise BridgeError(f"MT5 market depth is unavailable for {self.symbol} ({code}): {message}")
+        try:
+            entries = mt5.market_book_get(self.symbol)
+            if entries is None:
+                code, message = mt5.last_error()
+                raise BridgeError(f"MT5 market_book_get failed ({code}): {message}")
+            if not entries:
+                raise BridgeError(f"MT5 market depth is empty for {self.symbol}")
+
+            bids, asks = [], []
+            buy_types = {mt5.BOOK_TYPE_BUY}
+            sell_types = {mt5.BOOK_TYPE_SELL}
+            for entry in entries:
+                item = entry._asdict() if hasattr(entry, "_asdict") else entry
+                kind = item["type"]
+                side = bids if kind in buy_types else asks if kind in sell_types else None
+                if side is None:
+                    continue
+                price = float(item["price"])
+                quantity = float(item.get("volume_dbl", item.get("volume", 0)))
+                if not (price > 0 and quantity > 0 and price < float("inf") and quantity < float("inf")):
+                    raise BridgeError(f"MT5 market depth contains an invalid {self.symbol} level")
+                side.append({"price": price, "quantity": quantity})
+
+            bids.sort(key=lambda level: level["price"], reverse=True)
+            asks.sort(key=lambda level: level["price"])
+            if not bids or not asks:
+                raise BridgeError(f"MT5 market depth has no {'bid' if not bids else 'ask'} levels for {self.symbol}")
+            return {
+                "symbol": self.symbol,
+                "timestamp": time.time_ns() // 1_000_000,
+                "bids": bids,
+                "asks": asks,
+            }
+        finally:
+            mt5.market_book_release(self.symbol)
+
     def shutdown(self, _req=None):
         if self._mt5 is not None:
             self._mt5.shutdown()
@@ -174,6 +217,7 @@ def serve(bridge, stdin, stdout):
         "hello": bridge.hello,
         "connect": bridge.connect,
         "candles": bridge.candles,
+        "order_book": bridge.order_book,
         "shutdown": bridge.shutdown,
     }
     try:

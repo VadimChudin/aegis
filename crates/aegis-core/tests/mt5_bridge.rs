@@ -59,6 +59,11 @@ async fn connects_with_terminal_checklist_and_utc_candles() {
         bars.iter().map(|b| b.time).collect::<Vec<_>>(),
         [1_790_208_000, 1_790_208_900, 1_790_209_800]
     );
+    let book = conn.order_book().await.expect("order book");
+    assert_eq!(book.symbol, "XAUUSD.r");
+    assert!(book.timestamp > 0);
+    assert_eq!(book.bids[0].price, 4293.0);
+    assert_eq!(book.asks[0].price, 4294.0);
     conn.close().await;
 }
 

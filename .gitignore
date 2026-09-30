@@ -11,5 +11,6 @@ Thumbs.db
 .env
 
 # Agent workspace files: never commit
-.hoplite/
+.hoplite/*
+!.hoplite/settings.json
 .context/

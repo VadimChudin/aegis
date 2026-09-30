@@ -100,6 +100,23 @@ async fn check_venue(broker: &str, port: u16, expected: &[(&str, CheckStatus)]) 
             "{broker} {tf:?}: live poll must continue the history"
         );
     }
+
+    let book = conn
+        .order_book()
+        .await
+        .unwrap_or_else(|e| panic!("{broker} order book: {e}"));
+    assert_eq!(book.symbol, "XAUUSDT");
+    assert!(book.timestamp > 0);
+    assert_eq!(book.bids.len(), 4);
+    assert_eq!(book.asks.len(), 4);
+    assert!(book.bids.windows(2).all(|w| w[0].price > w[1].price));
+    assert!(book.asks.windows(2).all(|w| w[0].price < w[1].price));
+    assert_eq!(book.bids[0].quantity, 2.5);
+    let bids: Vec<_> = book.bids.iter().map(|l| (l.price, l.quantity)).collect();
+    let asks: Vec<_> = book.asks.iter().map(|l| (l.price, l.quantity)).collect();
+    let (densities, _) = aegis_core::density::Tracker::default().sample(book.timestamp, &bids, &asks);
+    assert_eq!(densities.len(), 2);
+    assert_eq!(book.asks[0].price, 4293.2);
 }
 
 #[tokio::test]

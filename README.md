@@ -39,6 +39,17 @@ python/aegis_lab/      Python: MT5 bridge, Binance and Bybit archive downloaders
 scripts/mock_venues.py local Binance/Bybit stand-in for development and tests
 ```
 
+## Density screener
+
+The terminal opens a separate, dockable gold order-book density window at startup. It monitors the
+selected connected broker even while the window is hidden, and records sampled densities and
+observations as rotating JSONL files in the application data folder (`densities/`). Binance and
+Bybit provide exchange books; RoboForex requires the MT5 symbol to expose a DOM. Missing DOM is
+shown as unavailable, never substituted with candle or another venue's data. Scores describe
+observations, not calibrated probabilities; no live orders are placed.
+
+Full Bounce setting inventory and screener rules: [Русское описание](docs/density-screener.md).
+
 ## Develop
 
 Needs Rust (stable), Node 18+ and Python 3.9+. On Linux also the Tauri system libraries (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`).
