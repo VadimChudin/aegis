@@ -155,9 +155,8 @@ impl Tracker {
             .map(|v| v.0)
             .fold(f64::INFINITY, f64::min);
         let mid = (bid + ask) / 2.0;
-        if !mid.is_finite() {
-            self.levels.clear();
-            self.thresholds = Thresholds::default();
+        if !mid.is_finite() || bid >= ask {
+            self.reset();
             return (Vec::new(), Vec::new());
         }
         let zone = (ask - bid).max(0.02);
@@ -466,6 +465,30 @@ fn quantile(sorted_or_unsorted: &[f64], q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_books_reset_adaptive_history() {
+        let mut tracker = Tracker::default();
+        let settings = DensitySettings::default();
+        let (bids, asks) = book(10.0);
+        for second in 0..=5 * 60 {
+            tracker.sample_with_settings(second * 1_000, &bids, &asks, &settings);
+        }
+        assert!(!tracker.thresholds.warming_up);
+        assert!(tracker
+            .sample_with_settings(301_000, &[], &asks, &settings)
+            .0
+            .is_empty());
+        tracker.sample_with_settings(302_000, &bids, &asks, &settings);
+        assert!(tracker.thresholds.warming_up);
+        let crossed = [(asks[0].0 + 1.0, 10.0)];
+        assert!(tracker
+            .sample_with_settings(303_000, &crossed, &asks, &settings)
+            .0
+            .is_empty());
+        assert!(tracker.day_summaries.is_empty());
+        assert!(tracker.last_sample.is_none());
+    }
 
     #[test]
     fn unchanged_book_activity_is_one() {

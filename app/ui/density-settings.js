@@ -130,10 +130,12 @@
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
   const merge = (settings) => ({ ...defaults, ...(settings || {}) });
   let draft = null;
+  let saving = false;
 
   function render(container, options = {}) {
-    const { settings, lang = "en", preview = false, loading = false, loadError = "", invoke, onSaved } = options;
-    let values = merge(draft || settings);
+    const { settings, lang = "en", preview = false, loading = false, loadError = "", invoke, onSaved, onRetry } = options;
+    let savedValues = merge(settings);
+    let values = merge({ ...savedValues, ...draft });
     const label = (text) => esc(t(text, lang));
     const message = loading ? t("Loading screener settings…", lang)
       : preview ? t("Preview only · settings are not saved without the desktop app.", lang)
@@ -144,7 +146,7 @@
       if (type === "checkbox") return `<label class="density-setting-toggle"><input data-key="${key}" type="checkbox" ${values[key] ? "checked" : ""}${disabled}><span>${label(name)}</span></label>`;
       if (type === "select") return `<label class="density-setting-field"><span>${label(name)}</span><select data-key="${key}"${disabled}><option value="strength">${label("Strength")}</option><option value="distance">${label("Distance")}</option></select></label>`;
       const limits = `${min !== null && min !== undefined ? ` min="${min}"` : ""}${max !== null && max !== undefined ? ` max="${max}"` : ""}${step ? ` step="${step}"` : ""}`;
-      return `<label class="density-setting-field"><span>${label(name)}</span><input data-key="${key}" type="${type}" value="${esc(values[key])}"${limits}${disabled}></label>`;
+      return `<label class="density-setting-field"><span>${label(name)}</span><input data-key="${key}" type="${type}" value="${esc(values[key])}"${type === "number" ? " required" : ""}${limits}${disabled}></label>`;
     }).join("")}</div></section>`).join("");
 
     container.innerHTML = `<div class="density-settings-form">
@@ -152,10 +154,12 @@
       <p class="density-settings-warning">${label("History cleanup warning: nonzero limits can delete old completed density history files. The active file is kept. Set both limits to 0 to disable automatic cleanup.")}</p>
       ${sections}
       <p class="density-settings-status" role="status" aria-live="polite">${esc(message)}</p>
-      <div class="density-settings-actions"><button class="ok density-settings-save" type="button" ${preview || loading || loadError || !invoke ? "disabled" : ""}>${label("Save screener settings")}</button></div>
+      <div class="density-settings-actions">${loadError && onRetry ? `<button class="ghost sm density-settings-retry" type="button">${esc(lang === "ru" ? "Повторить загрузку" : lang === "kk" ? "Қайта жүктеу" : "Retry loading")}</button>` : ""}<button class="ok density-settings-save" type="button" ${preview || loading || loadError || !invoke ? "disabled" : ""}>${label("Save screener settings")}</button></div>
     </div>`;
     const status = container.querySelector(".density-settings-status");
     const save = container.querySelector(".density-settings-save");
+    const retry = container.querySelector(".density-settings-retry");
+    if (retry) retry.onclick = onRetry;
     const setStatus = (text, error = false) => {
       status.textContent = text;
       status.dataset.error = error ? "1" : "0";
@@ -163,8 +167,9 @@
     container.querySelectorAll("[data-key]").forEach((input) => {
       if (input.dataset.key === "sort") input.value = values.sort;
       const update = () => {
-        if (!draft) draft = merge(values);
-        draft[input.dataset.key] = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value) : input.value;
+        if (!draft) draft = {};
+        draft[input.dataset.key] = input.type === "checkbox" ? input.checked
+          : input.type === "number" && input.value !== "" ? Number(input.value) : input.value;
         setStatus("");
       };
       input.addEventListener("input", update);
@@ -186,10 +191,12 @@
         return;
       }
       save.disabled = true;
+      saving = true;
       const inputs = [...container.querySelectorAll("input, select")];
       inputs.forEach((input) => { input.disabled = true; });
       try {
-        const saved = merge(await invoke("density_settings_save", { settings: draft || values }));
+        const saved = merge(await invoke("density_settings_save", { settings: merge({ ...savedValues, ...draft }) }));
+        savedValues = saved;
         values = saved;
         draft = null;
         onSaved?.(saved);
@@ -197,12 +204,13 @@
       } catch (error) {
         setStatus(String(error), true);
       } finally {
+        saving = false;
         inputs.forEach((input) => { input.disabled = false; });
         save.disabled = false;
       }
     };
-    return { get settings() { return merge(draft || values); } };
+    return { get settings() { return merge({ ...values, ...draft }); } };
   }
 
-  window.DensitySettingsUI = { defaults, merge, render };
+  window.DensitySettingsUI = { defaults, merge, render, get saving() { return saving; } };
 })();

@@ -69,6 +69,41 @@ struct Monitor {
     preferred: Option<BrokerId>,
     snapshot: Snapshot,
     tracker: Tracker,
+    settings_revision: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RequestRevision {
+    source: u64,
+    settings: u64,
+}
+
+impl Monitor {
+    fn revision(&self) -> RequestRevision {
+        RequestRevision {
+            source: self.snapshot.revision,
+            settings: self.settings_revision,
+        }
+    }
+
+    fn reset_source(&mut self, broker: Option<BrokerId>, symbol: Option<String>) {
+        self.tracker.reset();
+        self.snapshot = Snapshot {
+            broker,
+            symbol,
+            revision: self.snapshot.revision + 1,
+            docked: self.snapshot.docked,
+            ..Default::default()
+        };
+    }
+}
+
+fn choose_broker(preferred: Option<BrokerId>, saved: Option<BrokerId>, connected: &[BrokerId]) -> Option<BrokerId> {
+    [preferred, saved]
+        .into_iter()
+        .flatten()
+        .find(|id| connected.contains(id))
+        .or_else(|| connected.iter().copied().min())
 }
 
 pub struct DensityState {
@@ -93,13 +128,10 @@ impl DensityState {
     pub async fn invalidate(&self, broker: BrokerId) {
         let mut monitor = self.monitor.lock().await;
         if monitor.snapshot.broker == Some(broker) {
-            monitor.tracker.reset();
-            monitor.snapshot.rows.clear();
-            monitor.snapshot.mid_price = None;
-            monitor.snapshot.status = "waiting";
-            monitor.snapshot.updated_at = None;
-            monitor.snapshot.revision += 1;
+            let symbol = monitor.snapshot.symbol.clone();
+            monitor.reset_source(Some(broker), symbol);
         }
+        self.changed.notify_one();
     }
 }
 
@@ -271,16 +303,28 @@ pub async fn density_settings_save(
     state: State<'_, AppState>,
     settings: DensitySettings,
 ) -> Result<DensitySettings, String> {
+    save_density_settings(&app, &state, |value| *value = settings).await
+}
+
+async fn save_density_settings(
+    app: &AppHandle,
+    state: &AppState,
+    update: impl FnOnce(&mut DensitySettings),
+) -> Result<DensitySettings, String> {
+    let mut monitor = state.density.monitor.lock().await;
     let settings = {
         let mut store = state.settings.lock().await;
         let previous = store.public().density;
-        store.set_density(settings);
+        let mut next = previous.clone();
+        update(&mut next);
+        store.set_density(next);
         if let Err(error) = store.save() {
             store.set_density(previous);
             return Err(error.to_string());
         }
         store.public().density
     };
+    monitor.settings_revision += 1;
     state.density.docked.store(settings.docked, Ordering::SeqCst);
     state
         .density
@@ -289,8 +333,9 @@ pub async fn density_settings_save(
         .unwrap_or_else(|e| e.into_inner())
         .last_cleanup = 0;
     state.density.changed.notify_one();
-    dock(&app);
     let _ = app.emit("density_settings", &settings);
+    drop(monitor);
+    dock(app);
     Ok(settings)
 }
 
@@ -315,15 +360,10 @@ pub async fn density_select(
     let mut monitor = state.density.monitor.lock().await;
     monitor.preferred = broker;
     if monitor.snapshot.broker != broker {
-        monitor.tracker.reset();
-        let revision = monitor.snapshot.revision + 1;
-        monitor.snapshot = Snapshot {
-            broker,
-            revision,
-            ..Default::default()
-        };
+        monitor.reset_source(broker, None);
         let _ = app.emit("density_update", &monitor.snapshot);
     }
+    state.density.changed.notify_one();
     Ok(())
 }
 
@@ -331,32 +371,29 @@ pub async fn run(app: AppHandle) {
     let mut previous_status = String::new();
     loop {
         let state = app.state::<AppState>();
+        let (preferred, initial_revision) = {
+            let monitor = state.density.monitor.lock().await;
+            (monitor.preferred, monitor.revision())
+        };
         let public = state.settings.lock().await.public();
         let saved = public.chart_broker;
         let settings = public.density;
-        let preferred = state.density.monitor.lock().await.preferred;
         let selected = {
             let sessions = state.sessions.lock().await;
-            preferred
-                .or(saved)
-                .filter(|id| sessions.contains_key(id))
-                .or_else(|| sessions.keys().copied().min())
+            let connected: Vec<_> = sessions.keys().copied().collect();
+            choose_broker(preferred, saved, &connected)
                 .and_then(|id| sessions.get(&id).map(|s| (id, s.connector.clone())))
         };
         let revision = {
             let mut monitor = state.density.monitor.lock().await;
+            if monitor.revision() != initial_revision {
+                continue;
+            }
             let id = selected.as_ref().map(|(id, _)| *id);
             if monitor.snapshot.broker != id {
-                monitor.tracker.reset();
-                let revision = monitor.snapshot.revision + 1;
-                monitor.snapshot = Snapshot {
-                    broker: id,
-                    symbol: selected.as_ref().map(|(_, c)| c.symbol().to_string()),
-                    revision,
-                    ..Default::default()
-                };
+                monitor.reset_source(id, selected.as_ref().map(|(_, c)| c.symbol().to_string()));
             }
-            monitor.snapshot.revision
+            monitor.revision()
         };
         let result = if let Some((_, connector)) = &selected {
             Some(connector.order_book().await)
@@ -376,7 +413,7 @@ pub async fn run(app: AppHandle) {
             }
         }
         let mut monitor = state.density.monitor.lock().await;
-        if monitor.snapshot.revision != revision {
+        if monitor.revision() != revision {
             continue;
         }
         let mut events = Vec::new();
@@ -610,15 +647,59 @@ pub fn density_hide(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn density_set_docked(app: AppHandle, state: State<'_, AppState>, docked: bool) -> Result<(), String> {
-    let mut settings = state.settings.lock().await.public().density;
-    settings.docked = docked;
-    density_settings_save(app, state, settings).await?;
+    save_density_settings(&app, &state, |value| value.docked = docked).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_flight_requests_are_invalidated_by_source_or_settings_changes() {
+        let mut monitor = Monitor::default();
+        let before_source = monitor.revision();
+        monitor.reset_source(Some(BrokerId::Binance), Some("XAUUSDT".into()));
+        assert!(monitor.revision() != before_source);
+        let before_settings = monitor.revision();
+        monitor.settings_revision += 1;
+        assert!(monitor.revision() != before_settings);
+    }
+
+    #[test]
+    fn resetting_source_clears_errors_and_thresholds() {
+        let mut monitor = Monitor::default();
+        monitor.snapshot.error = Some("old source failure".into());
+        monitor.snapshot.recording_error = Some("old recording failure".into());
+        monitor.snapshot.thresholds.bid = 10.0;
+        monitor.snapshot.docked = false;
+        monitor.reset_source(Some(BrokerId::Bybit), None);
+        assert!(monitor.snapshot.error.is_none());
+        assert!(monitor.snapshot.recording_error.is_none());
+        assert_eq!(monitor.snapshot.thresholds.bid, 0.0);
+        assert!(!monitor.snapshot.docked);
+    }
+
+    #[test]
+    fn disconnected_preference_falls_back_to_saved_connected_source() {
+        assert_eq!(
+            choose_broker(
+                Some(BrokerId::Roboforex),
+                Some(BrokerId::Bybit),
+                &[BrokerId::Binance, BrokerId::Bybit]
+            ),
+            Some(BrokerId::Bybit)
+        );
+        assert_eq!(
+            choose_broker(
+                Some(BrokerId::Bybit),
+                Some(BrokerId::Binance),
+                &[BrokerId::Binance, BrokerId::Bybit]
+            ),
+            Some(BrokerId::Bybit)
+        );
+        assert_eq!(choose_broker(None, None, &[]), None);
+    }
 
     #[test]
     fn recording_appends_and_rotates_without_overwriting() {

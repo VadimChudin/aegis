@@ -627,8 +627,12 @@
       loadError: S.densityLoadError,
       invoke: tauri ? invoke : null,
       onSaved: (settings) => { S.densitySettings = settings; },
+      onRetry: () => {
+        S.densityLoadError = "";
+        renderScreenerSettings();
+      },
     });
-    if (!tauri || S.densityLoaded || S.densityLoading) return;
+    if (!tauri || S.densityLoaded || S.densityLoading || S.densityLoadError) return;
     S.densityLoading = true;
     renderScreenerSettings();
     invoke("density_settings_get").then((settings) => {
@@ -708,6 +712,10 @@
     tauri.event.listen("density_settings", ({ payload }) => {
       S.densitySettings = window.DensitySettingsUI.merge(payload);
       S.densityLoaded = true;
+      S.densityLoadError = "";
+      if (S.panel === "theme" && S.settingsTab === "screener" && !S.densityLoading && !window.DensitySettingsUI.saving) {
+        renderSettingsPanel("screener");
+      }
     });
   }
 
