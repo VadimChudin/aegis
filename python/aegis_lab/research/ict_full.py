@@ -62,7 +62,7 @@ def exit_r(o, h, l, rel, f, entry, stop, target, be) -> tuple[float, float] | No
     """Walk 1m bars after the fill bar `f` (long space). -> (exit price, slippage) or None."""
     risk = entry - stop
     if l[f] <= stop:
-        return stop, SLIP
+        return min(o[f], stop), SLIP
     end = first(rel[f + 1:] >= EXIT_AT)
     end = len(o) - f - 1 if end < 0 else end
     O, Hh, L = o[f + 1:f + 1 + end], h[f + 1:f + 1 + end], l[f + 1:f + 1 + end]
@@ -133,9 +133,10 @@ def setups_day(o, h, l, c, rel, levels, targets, atr_d, kz, bar=300):
     np.minimum.at(l5, b, l[idx])
     c5[b] = c[idx]  # idx ascending: the last write is the bar's close
     last5[b] = idx
-    ok = np.isfinite(c5)
+    counts = np.bincount(b, minlength=nb)
+    ok = np.isfinite(c5) & (counts == bar // 60)
     sb = int((rel[s] - (k0 - H)) // bar)
-    sw = [j for j in swings_high(np.where(ok, h5, -np.inf)) if j < sb]
+    sw = [j for j in swings_high(np.where(ok, h5, -np.inf)) if j + 2 < sb]
     if not sw:
         return []
     _step("3 swing before raid")

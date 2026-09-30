@@ -64,6 +64,21 @@ pub struct GaSpec {
     pub tune: Vec<String>,
 }
 
+// Bound externally supplied work before allocating a population or multiplying budgets.
+// Defaults are unchanged; excessive requests are normalized, not silently allowed to hang.
+const MAX_POPULATION: usize = 256;
+const MAX_GENERATIONS: usize = 256;
+const MAX_DAYS: i64 = 36_500;
+
+fn bounded_spec(spec: &GaSpec) -> GaSpec {
+    let mut s = spec.clone();
+    s.population = s.population.clamp(8, MAX_POPULATION);
+    s.generations = s.generations.clamp(1, MAX_GENERATIONS);
+    s.train_days = s.train_days.clamp(2, MAX_DAYS);
+    s.test_days = s.test_days.clamp(1, MAX_DAYS);
+    s
+}
+
 impl Default for GaSpec {
     fn default() -> Self {
         GaSpec {
@@ -766,8 +781,8 @@ fn evolve<F: Fn(Vec<f64>) -> Individual + Sync>(
     progress: &(dyn Fn(usize, f64) + Sync),
     evaluate: F,
 ) -> EnsembleRun {
-    let n = spec.population.max(8);
-    let generations = spec.generations.max(1);
+    let n = spec.population.clamp(8, MAX_POPULATION);
+    let generations = spec.generations.clamp(1, MAX_GENERATIONS);
     let mut initial: Vec<_> = std::iter::once(start.clone())
         .chain((1..n).map(|_| random_genome(genes, &start, rng)))
         .collect();
@@ -910,8 +925,8 @@ pub fn run_ga(
     } = evolve(genes, encode(base, genes), spec, rng, progress, |x| {
         multi_eval(engine, base, genes, x, w, o)
     });
-    let n = spec.population.max(8);
-    let generations = spec.generations.max(1);
+    let n = spec.population.clamp(8, MAX_POPULATION);
+    let generations = spec.generations.clamp(1, MAX_GENERATIONS);
     let ov = validation_objective(o, w);
     let (best, validation_fitness) = select_validation(&archive, |x| eval(engine, base, genes, x, w.validation, &ov).0);
     let pareto = archive
@@ -956,7 +971,10 @@ pub fn random_search(
     budget: usize,
     rng: &mut Rng,
 ) -> (f64, f64, Params) {
-    let count = budget.saturating_sub(FINALISTS) / TRAIN_CALLS;
+    let count = budget
+        .saturating_sub(FINALISTS)
+        .min(TRAIN_CALLS * MAX_POPULATION * MAX_GENERATIONS)
+        / TRAIN_CALLS;
     let start = encode(base, genes);
     let cap = 48.max(FINALISTS);
     let mut archive = Vec::new();
@@ -1101,6 +1119,11 @@ fn admit_oos(mut candidates: Vec<(Trade, Params)>) -> Vec<Trade> {
 }
 
 pub fn optimize(engine: &Engine, base: &Params, spec: &GaSpec, progress: &(dyn Fn(Progress) + Sync)) -> OptimizeReport {
+    if base.on_close() != engine.close_entry {
+        return optimize(&engine.for_entry_mode(base.on_close()), base, spec, progress);
+    }
+    let bounded = bounded_spec(spec);
+    let spec = &bounded;
     // Position settings do nothing on 5m bars; tuning them would only add noise.
     let genes: Vec<Gene> = genes(spec)
         .into_iter()
@@ -1122,9 +1145,9 @@ pub fn optimize(engine: &Engine, base: &Params, spec: &GaSpec, progress: &(dyn F
         .max(if base.use_model { engine.scored_from() } else { 0 });
     let last = bars.last().map_or(0, |b| b.time + 300);
     let mut plan = Vec::new();
-    let mut test_from = first + spec.train_days * day;
-    while test_from + day < last {
-        let test_to = (test_from + spec.test_days * day).min(last);
+    let mut test_from = first.saturating_add(spec.train_days * day);
+    while test_from.saturating_add(day) < last {
+        let test_to = test_from.saturating_add(spec.test_days * day).min(last);
         plan.push((test_from - spec.train_days * day, test_from, test_to));
         test_from = test_to;
     }
@@ -1832,5 +1855,59 @@ mod tests {
         assert_eq!(g.len(), 3);
         assert!(g.iter().all(|g| !g.id.starts_with("filters.")));
         assert!(g.iter().all(|g| spec.tune.contains(&g.id)));
+    }
+    #[test]
+    fn external_optimizer_work_is_bounded_and_days_advance() {
+        let extreme = GaSpec {
+            population: usize::MAX,
+            generations: usize::MAX,
+            train_days: i64::MAX,
+            test_days: i64::MIN,
+            ..GaSpec::default()
+        };
+        let b = bounded_spec(&extreme);
+        assert_eq!(b.population, MAX_POPULATION);
+        assert_eq!(b.generations, MAX_GENERATIONS);
+        assert_eq!(b.train_days, MAX_DAYS);
+        assert_eq!(b.test_days, 1);
+        let small = bounded_spec(&GaSpec {
+            train_days: 0,
+            test_days: 0,
+            ..GaSpec::default()
+        });
+        assert_eq!((small.train_days, small.test_days), (2, 1));
+        let d = GaSpec::default();
+        let b = bounded_spec(&d);
+        assert_eq!(
+            (b.population, b.generations, b.train_days, b.test_days),
+            (d.population, d.generations, d.train_days, d.test_days)
+        );
+    }
+
+    #[test]
+    fn empty_history_and_zero_test_days_finish_with_no_oos_trades() {
+        let e = Engine::new(
+            std::sync::Arc::new(Vec::new()),
+            &super::super::scan::ScanConfig::default(),
+            false,
+        );
+        let p = Params {
+            use_model: false,
+            ..Params::default()
+        };
+        let spec = GaSpec {
+            population: 8,
+            generations: 1,
+            test_days: 0,
+            metrics: vec!["none".into()],
+            tune: vec!["tp_r".into()],
+            ..GaSpec::default()
+        };
+        let result = optimize(&e, &p, &spec, &|_| {});
+        assert!(result.oos_trades.is_empty() && result.windows.is_empty());
+        assert_eq!(result.recent, (0, 0));
+        let scored = Params { use_model: true, ..p };
+        let result = optimize(&e, &scored, &spec, &|_| {});
+        assert!(result.oos_trades.is_empty() && result.windows.is_empty());
     }
 }

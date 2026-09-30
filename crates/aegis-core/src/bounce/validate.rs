@@ -369,7 +369,11 @@ fn permuted_engine(e: &Engine, seed: u64) -> Engine {
 }
 
 fn scored_range(e: &Engine, p: &Params) -> (usize, usize) {
-    let from = if p.use_model { e.index_at(e.scored_from()) } else { 0 };
+    let from = if p.use_model {
+        e.index_at(e.scored_from()).min(e.bars.len().saturating_sub(1))
+    } else {
+        0
+    };
     (from, e.bars.len())
 }
 
@@ -377,7 +381,7 @@ fn scored_range(e: &Engine, p: &Params) -> (usize, usize) {
 // last train bar's duration rather than the next bar's timestamp (there may be a gap).
 fn selection_train_range(recent: (usize, usize)) -> (usize, usize) {
     let (a, z) = recent;
-    (a, a + (z - a) * 3 / 4)
+    (a, a + z.saturating_sub(a) / 4 * 3 + (z.saturating_sub(a) % 4) * 3 / 4)
 }
 
 fn comparison_check(
@@ -406,6 +410,40 @@ fn comparison_check(
 
 /// Checks for settings: `opt` adds the GA-specific ones (DSR over its trials, PBO, baseline).
 pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validation {
+    if p.on_close() != e.close_entry {
+        return validate(&e.for_entry_mode(p.on_close()), p, opt);
+    }
+    if e.bars.is_empty() {
+        let empty = stats(&[], 0, 0);
+        let unknown = f64::NAN;
+        return Validation {
+            stats: empty.clone(),
+            sharpe: unknown,
+            psr: unknown,
+            dsr: unknown,
+            selected_sharpe: unknown,
+            sr0: unknown,
+            trials: 0,
+            pbo: unknown,
+            pbo_loss: unknown,
+            pbo_configs: 0,
+            pbo_combinations: 0,
+            boot_win_rate: (unknown, unknown),
+            boot_avg_r: (unknown, unknown),
+            boot_per_day: (unknown, unknown),
+            control: empty.clone(),
+            permuted: empty.clone(),
+            t_daily: unknown,
+            fills: Vec::new(),
+            base: empty,
+            baseline: opt.map(|o| o.baseline.clone()),
+            checks: vec![Check {
+                id: "history",
+                pass: false,
+                value: "No price history; validation unavailable".into(),
+            }],
+        };
+    }
     let (from, to) = scored_range(e, p);
     let (trades, st, st_from, st_to) = match opt {
         Some(o) => {
@@ -428,7 +466,7 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
     // Deflated Sharpe of the selection: daily Sharpe of the chosen settings on the window they
     // were chosen on, against the expected maximum daily Sharpe of the trials evaluated there.
     let (dsr, selected, sr0, n_trials) = match opt {
-        Some(o) => {
+        Some(o) if o.recent.0 < selection_train_range(o.recent).1 && o.recent.1 <= e.bars.len() => {
             let (a, z) = selection_train_range(o.recent);
             let (ta, tz) = (e.bars[a].time, e.bars[z - 1].time + 300);
             let sel = daily_r(&e.training_trades(&o.params, a, z), ta, tz);
@@ -451,6 +489,7 @@ pub fn validate(e: &Engine, p: &Params, opt: Option<&OptimizeReport>) -> Validat
             let sr0 = expected_max_sharpe(n_eff, sd_trials * sd_trials);
             (psr(sr, sel.len(), sk, ku, sr0), sr, sr0, n_eff)
         }
+        Some(_) => (f64::NAN, f64::NAN, f64::NAN, 0),
         None => {
             let d = daily_r(&trades, st_from, st_to);
             let (m, sd, sk, ku) = moments(&d);
@@ -810,5 +849,18 @@ mod tests {
     fn proportion_test() {
         assert!(prop_test(700, 1000, 500, 1000) < 1e-6);
         assert!(prop_test(500, 1000, 500, 1000) > 0.4);
+    }
+    #[test]
+    fn empty_history_is_unavailable_not_a_panic_or_a_pass() {
+        let e = Engine::new(
+            std::sync::Arc::new(Vec::new()),
+            &super::super::scan::ScanConfig::default(),
+            false,
+        );
+        let result = validate(&e, &Params::default(), None);
+        assert_eq!(result.stats.trades, 0);
+        assert!(result.psr.is_nan() && result.dsr.is_nan());
+        assert!(!result.checks.is_empty());
+        assert!(result.checks.iter().all(|c| !c.pass));
     }
 }

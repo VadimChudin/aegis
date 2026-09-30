@@ -75,6 +75,10 @@ def resample(m: pd.DataFrame, sec: int) -> pd.DataFrame:
     b = pd.DataFrame({"o": g.o.first(), "h": g.h.max(), "l": g.l.min(), "c": g.c.last(), "v": g.v.sum()})
     b.index.name = "t"
     b = b.reset_index()
+    # Drop incomplete aggregates BEFORE indicators: malformed prior bars must
+    # not contaminate the ATR of subsequently complete bars.
+    complete = (g.t.count() == sec // 60) & (g.t.min() == g.t.count().index) & (g.t.max() + 60 == g.t.count().index + sec)
+    b = b.loc[complete.to_numpy()].reset_index(drop=True)
     tr = np.maximum(b.h - b.l, np.maximum((b.h - b.c.shift()).abs(), (b.l - b.c.shift()).abs()))
     b["atr"] = tr.rolling(14, min_periods=5).mean()
     return b
@@ -84,6 +88,8 @@ def zones(b: pd.DataFrame, sec: int, k: int = 3) -> pd.DataFrame:
     """All zones of `b`. `valid` = first second the zone is known; dir +1 bullish, -1 bearish."""
     t, o, h, l, c, atr = (b[x].to_numpy() for x in ("t", "o", "h", "l", "c", "atr"))
     n = len(b)
+    if not n:
+        return pd.DataFrame(columns=["kind", "dir", "valid", "top", "bot", "atr", "trend", "pd_ok", "choch", "bar", "size_atr"])
     out = []
     sh = sl = None  # last confirmed unbroken swing (index, price)
     highs, lows = [], []  # confirmed swings for the dealing range and sweeps
@@ -157,8 +163,8 @@ def zones(b: pd.DataFrame, sec: int, k: int = 3) -> pd.DataFrame:
 
 
 @nb.njit(cache=True)
-def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, depth, grid_depth,
-         buf, rr, be, max_hold, fk, tick):
+def _sim_details(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, depth, grid_depth,
+         buf, rr, be, max_hold, fk, tick, mo, slippage, spread):
     """-> filled qty, avg entry, stop, pnl ($/oz x qty), market qty, exit code, entry index.
     exit: 0 stop, 1 target, 2 breakeven, 3 time, 4 end of data. Works in "long" space."""
     if d > 0:
@@ -198,13 +204,14 @@ def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, 
     last_sh_i = -1
     be_on = False
     for i in range(i0, i1):
+        op = mo[i] * d
         if d > 0:
             hi, lo, cl = mh[i], ml[i], mc[i]
         else:
             hi, lo, cl = -ml[i], -mh[i], -mc[i]
         if qty == 0.0:
-            if i >= i_exp or (hour_end[i] and cl < far):
-                return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1
+            if i >= i_exp or (i > i0 and hour_end[i - 1] and mc[i - 1] * d < far):
+                return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1, -1
             if mode <= 1:
                 if active[i]:
                     for k in range(nl):
@@ -214,7 +221,7 @@ def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, 
                             cost += wts[k] * prices[k]
                             t_in = i
                 if qty > 0.0 and lo <= stop:
-                    return qty, cost / qty, stop, qty * stop - cost, qty, 0, t_in
+                    return qty, cost / qty, stop, qty * (min(stop, op) - slippage - spread / 2) - cost, qty, 0, t_in, i
                 continue
             # choch entry
             if lo <= edge:
@@ -238,9 +245,9 @@ def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, 
                         last_sh = hj
                         last_sh_i = j
                 if low_in < far - buf:
-                    return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1
+                    return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1, -1
                 if active[i] and last_sh_i >= 0 and last_sh_i < low_i and cl > last_sh:
-                    e = cl + 0.01
+                    e = cl + slippage + spread / 2
                     stop = low_in - buf
                     if e - stop <= 0.02:
                         continue
@@ -252,7 +259,7 @@ def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, 
             continue
         # in a position
         avg = cost / qty
-        if mode <= 1 and hi < target:
+        if mode <= 1:
             for k in range(nl):
                 if not filled[k] and lo <= prices[k] - tick and active[i]:
                     filled[k] = True
@@ -261,28 +268,44 @@ def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, 
             avg = cost / qty
         sp = avg if be_on else stop
         if lo <= sp:
-            return qty, avg, stop, qty * sp - cost, qty, 2 if be_on else 0, t_in
-        if hi >= target + 0.01:
-            return qty, avg, stop, qty * target - cost, 0.0, 1, t_in
+            return qty, avg, stop, qty * (min(sp, op) - slippage - spread / 2) - cost, qty, 2 if be_on else 0, t_in, i
+        if hi >= target + tick:
+            return qty, avg, stop, qty * target - cost, 0.0, 1, t_in, i
         if be > 0 and hi >= avg + be * (avg - stop):
             be_on = True
         if mt[i] - mt[t_in] >= max_hold:
-            return qty, avg, stop, qty * cl - cost, qty, 3, t_in
+            return qty, avg, stop, qty * (cl - slippage - spread / 2) - cost, qty, 3, t_in, i
     if qty > 0.0:
         cl = mc[i1 - 1] if d > 0 else -mc[i1 - 1]
-        return qty, cost / qty, stop, qty * cl - cost, qty, 4, t_in
-    return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1
+        return qty, cost / qty, stop, qty * (cl - slippage - spread / 2) - cost, qty, 4, t_in, i1 - 1
+    return 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1, -1
+
+
+@nb.njit(cache=True)
+def _sim(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode, n, depth, grid_depth,
+         buf, rr, be, max_hold, fk, tick):
+    """Compatibility interface; production Lab supplies actual opens and execution costs."""
+    result = _sim_details(mt, mh, ml, mc, hour_end, active, i0, i1, i_exp, d, top, bot, mode,
+                          n, depth, grid_depth, buf, rr, be, max_hold, fk, tick, mc, 0.05, 0.0)
+    return result[:7]
 
 
 MODES = {"limit": 0, "grid": 1, "choch": 2}
 BASE = dict(htf=3600, kinds=("ob",), mode="limit", n=4, depth=0.0, grid_depth=1.0, buf=0.1, rr=2.0,
             be=0.0, max_hold=86400, max_age=72 * 3600, trend=True, pd=False, killzone=False,
-            min_size=0.2, max_size=3.0, fk=3, min_risk=1.0)
+            min_size=0.2, max_size=3.0, fk=3, min_risk=1.0, portfolio="one_position")
 
 
 class Lab:
-    def __init__(self, venue: str = "binance", tick_through: float = 0.01):
-        m = minutes() if venue == "binance" else bybit_minutes()
+    def __init__(self, venue: str = "binance", tick_through: float = 0.01, m=None,
+                 maker=MAKER, taker=TAKER, slippage=0.05, spread=0.0):
+        m = (minutes() if venue == "binance" else bybit_minutes()) if m is None else m.copy()
+        if len(m) == 0 or not m.t.is_monotonic_increasing or m.t.duplicated().any():
+            raise ValueError("Minute timestamps must be nonempty, unique and sorted")
+        if min(maker, taker, slippage, spread) < 0:
+            raise ValueError("Execution costs must be nonnegative")
+        self.maker, self.taker, self.slippage, self.spread = maker, taker, slippage, spread
+        self.mo = m.o.to_numpy()
         self.tick = tick_through
         self.m = m
         self.mt = m.t.to_numpy()
@@ -301,8 +324,12 @@ class Lab:
             self.z[sec] = zones(resample(m, sec), sec)
             self.hour_end[sec] = ((self.mt + 60) % sec) == 0
 
-    def run(self, cfg: dict) -> pd.DataFrame:
+    def run(self, cfg: dict, start=None, end=None) -> pd.DataFrame:
         z = self.z[cfg["htf"]]
+        # Independent cohorts start flat with fresh zones only. Warmup bars
+        # provide indicators, not resurrected orders with discarded lifecycle.
+        if start is not None:
+            z = z[z.valid >= start]
         z = z[z.kind.isin(cfg["kinds"]) & (z.size_atr >= cfg["min_size"]) & (z.size_atr <= cfg["max_size"])]
         if cfg["trend"]:
             z = z[z.trend == z.dir]
@@ -314,20 +341,24 @@ class Lab:
         i1s = np.searchsorted(self.mt, z.valid.to_numpy() + cfg["max_age"])
         mode = MODES[cfg["mode"]]
         rows = []
+        end_i = len(self.mt) if end is None else int(np.searchsorted(self.mt + 60, end, side="right"))
+        start_i = 0 if start is None else int(np.searchsorted(self.mt, start))
         for (idx, r), i0, i1 in zip(z.iterrows(), i0s, i1s):
-            if i0 >= len(self.mt):
+            i0 = max(i0, start_i)
+            if i0 >= end_i or i0 >= i1:
                 continue
             buf = cfg["buf"] * r.atr
-            qty, avg, stop, pnl, mkt, ex, ti = _sim(
-                self.mt, self.mh, self.ml, self.mc, he, active, i0, len(self.mt), i1, r.dir, r.top, r.bot,
+            qty, avg, stop, pnl, mkt, ex, ti, tx = _sim_details(
+                self.mt, self.mh, self.ml, self.mc, he, active, i0, end_i, i1, r.dir, r.top, r.bot,
                 mode, cfg["n"], cfg["depth"], cfg["grid_depth"], buf, cfg["rr"], cfg["be"],
-                cfg["max_hold"], cfg["fk"], self.tick)
+                cfg["max_hold"], cfg["fk"], self.tick, self.mo, self.slippage, self.spread)
             if qty <= 0:
                 continue
             risk = qty * (avg - stop)
             px = abs(avg)
-            entry_fee = (TAKER if mode == 2 else MAKER) * px * qty
-            exit_fee = (TAKER * mkt + MAKER * (qty - mkt)) * px
+            entry_fee = (self.taker if mode == 2 else self.maker) * px * qty
+            exit_px = abs(avg + pnl / qty)
+            exit_fee = (self.taker * mkt + self.maker * (qty - mkt)) * exit_px
             fee = entry_fee + exit_fee
             # R per unit of the risk planned for the whole order (all limits filled): a trade where
             # only the smallest limit filled must not weigh as much as a full one
@@ -335,9 +366,22 @@ class Lab:
             if (plan if mode <= 1 else risk / qty) < cfg["min_risk"]:
                 continue
             rows.append((idx, r.kind, r.dir, self.mt[ti], qty, risk / qty, pnl / qty, fee / qty, ex,
-                         pnl / plan, (pnl - fee) / plan, pnl, fee))
-        return pd.DataFrame(rows, columns=["zone", "kind", "dir", "t", "qty", "risk", "usd", "fee", "exit",
-                                           "r_gross", "r_net", "pnl_total", "fee_total"])
+                         pnl / plan, (pnl - fee) / plan, pnl, fee, self.mt[tx] + 60))
+        trades = pd.DataFrame(rows, columns=["zone", "kind", "dir", "t", "qty", "risk", "usd", "fee", "exit",
+                                           "r_gross", "r_net", "pnl_total", "fee_total", "exit_t"])
+        if cfg.get("portfolio", "one_position") == "one_position" and len(trades):
+            # Competing resting orders are cancelled when the first order fills. No reissue.
+            trades = trades.sort_values(["t", "zone"], kind="stable")
+            keep, available = [], -1
+            for idx, trade in trades.iterrows():
+                armed = max(z.loc[trade.zone, "valid"], self.mt[start_i])
+                if trade.t >= available and armed >= available:
+                    keep.append(idx)
+                    available = trade.exit_t
+            trades = trades.loc[keep]
+        elif cfg.get("portfolio", "one_position") not in ("one_position", "independent"):
+            raise ValueError("portfolio must be one_position or independent")
+        return trades.reset_index(drop=True)
 
     @staticmethod
     def plan_risk(cfg: dict, r, buf: float) -> float:
@@ -350,7 +394,7 @@ class Lab:
         return float((w * (zh * (1 - depth) + buf)).sum() / w.sum())
 
     def summary(self, r: pd.DataFrame, lo: int, hi: int) -> dict:
-        r = r[(r.t >= lo) & (r.t < hi)]
+        r = r[(r.t >= lo) & (r.t < hi) & (r.exit_t <= hi) & (r.exit != 4)]
         days = (min(hi, self.mt[-1]) - max(lo, self.mt[0])) / 86400
         if len(r) < 1:
             return {"n": 0}

@@ -99,7 +99,14 @@ pub fn parse_csv(text: &str) -> Result<Vec<Bar>, String> {
             .get(time_col)
             .and_then(|s| s.trim().parse().ok())
             .ok_or_else(|| format!("line {}: bad time", n + 2))?;
-        let time = if t > 1e11 { (t / 1000.0) as i64 } else { t as i64 };
+        if !t.is_finite() || t < 0.0 {
+            return Err(format!("line {}: invalid timestamp", n + 2));
+        }
+        let scaled = if t > 1e11 { t / 1000.0 } else { t };
+        if scaled >= i64::MAX as f64 {
+            return Err(format!("line {}: timestamp out of range", n + 2));
+        }
+        let time = scaled as i64;
         let mut b = Bar::ohlcv(
             time,
             get(&["open"]),
@@ -125,12 +132,32 @@ pub fn parse_csv(text: &str) -> Result<Vec<Bar>, String> {
         b.taker_ratio = get(&["taker_ratio"]);
         b.spread = get(&["spread"]);
         b.funding = get(&["funding"]);
-        if [b.open, b.high, b.low, b.close].iter().any(|v| !v.is_finite()) {
-            return Err(format!("line {}: bad OHLC", n + 2));
+        if [b.open, b.high, b.low, b.close]
+            .iter()
+            .any(|v| !v.is_finite() || *v <= 0.0)
+            || b.high < b.open.max(b.close)
+            || b.low > b.open.min(b.close)
+            || b.low > b.high
+        {
+            return Err(format!("line {}: invalid OHLC range", n + 2));
+        }
+        // Unknown optional volume remains NaN, but negative/infinite volume is invalid.
+        if b.volume.is_infinite() || b.volume < 0.0 {
+            return Err(format!("line {}: invalid volume", n + 2));
         }
         bars.push(b);
     }
     bars.sort_by_key(|b| b.time);
+    for pair in bars.windows(2) {
+        if pair[0].time == pair[1].time
+            && (pair[0].open != pair[1].open
+                || pair[0].high != pair[1].high
+                || pair[0].low != pair[1].low
+                || pair[0].close != pair[1].close)
+        {
+            return Err(format!("conflicting candles at timestamp {}", pair[0].time));
+        }
+    }
     bars.dedup_by_key(|b| b.time);
     Ok(bars)
 }
@@ -162,6 +189,36 @@ pub fn load_csv(path: &Path) -> Result<Vec<Bar>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_prices_timestamps_and_volume_are_rejected() {
+        for row in [
+            "NaN,1,2,0.5,1.5,10",
+            "inf,1,2,0.5,1.5,10",
+            "-1,1,2,0.5,1.5,10",
+            "0,1,0.8,0.5,1.5,10",
+            "0,1,2,1.6,1.5,10",
+            "0,0,2,0.5,1.5,10",
+            "0,1,2,0.5,1.5,-1",
+            "0,1,2,0.5,1.5,inf",
+        ] {
+            assert!(
+                parse_csv(&format!("time,open,high,low,close,volume\n{row}\n")).is_err(),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn conflicting_duplicate_prices_are_not_silently_selected() {
+        assert!(parse_csv("time,open,high,low,close\n0,1,2,0.5,1.5\n0,1,3,0.5,1.5\n").is_err());
+        assert_eq!(
+            parse_csv("time,open,high,low,close\n0,1,2,0.5,1.5\n0,1,2,0.5,1.5\n")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 
     #[test]
     fn parses_research_and_kline_csv() {

@@ -703,6 +703,19 @@ impl Engine {
         e
     }
 
+    /// Reuse the scanned touches, but fit scores on the requested causal entry basis.
+    pub(crate) fn for_entry_mode(&self, close_entry: bool) -> Engine {
+        Engine::with_touches(
+            self.bars.clone(),
+            self.minutes.clone(),
+            self.touches.clone(),
+            self.pending.clone(),
+            &self.scan,
+            close_entry,
+        )
+        .with_seconds(self.seconds.clone())
+    }
+
     /// Adds 1-second candles for settings with `sec_engine` on.
     pub fn with_seconds(mut self, seconds: Arc<Vec<Sec>>) -> Engine {
         self.seconds = seconds;
@@ -840,7 +853,13 @@ impl Engine {
             self.touches.iter().map(one).unzip()
         };
         let (exit, exit_time): (Vec<u32>, Vec<i64>) = settled.into_iter().unzip();
-        let prob = self.calibrate(&r, &exit);
+        // A cache key distinguishes the entry mode, but its model must also do so:
+        // close-bar features are unavailable to a resting limit at the bar's start.
+        let prob = if p.on_close() == self.close_entry {
+            self.calibrate(&r, &exit)
+        } else {
+            self.for_entry_mode(p.on_close()).calibrate(&r, &exit)
+        };
         let sim = Arc::new(Sim {
             r,
             exit,
@@ -1061,6 +1080,9 @@ impl Engine {
     }
 
     pub fn report(&self, p: &Params) -> Report {
+        if p.on_close() != self.close_entry {
+            return self.for_entry_mode(p.on_close()).report(p);
+        }
         let n = self.bars.len();
         let sim = self.sim(p);
         let (taken, passed) = self.select(p, &sim, 0, n);
@@ -1147,6 +1169,9 @@ impl Engine {
     /// Expected entries after the last bar: a score model trained on the last 4 months, and the
     /// calibration of the last 4 months for `p`'s trade setting.
     pub fn live(&self, p: &Params) -> LiveReport {
+        if p.on_close() != self.close_entry {
+            return self.for_entry_mode(p.on_close()).live(p);
+        }
         let last = self.bars.last().copied().unwrap_or(Bar::ohlcv(0, 0., 0., 0., 0., 0.));
         let n = self.touches.len();
         let since = last.time - 122 * 86_400;
@@ -1680,5 +1705,69 @@ mod tests {
         assert_eq!(month_id(1_767_225_600), "2026-01");
         assert_eq!(calendar_days(0, 4 * 86_400), 4.0);
         assert_eq!(calendar_days(100, 200), 1.0);
+    }
+    #[test]
+    fn cached_limit_probabilities_ignore_close_features_and_construction_mode() {
+        let mut bars: Vec<Bar> = (0..4800)
+            .map(|i| {
+                let time = (i / 800) as i64 * 31 * 86_400 + (i % 800) as i64 * 300;
+                Bar::ohlcv(time, 100.0, 100.1, 99.9, 100.0, 1.0)
+            })
+            .collect();
+        for i in (1..bars.len() - 25).step_by(4) {
+            let time = bars[i + 1].time;
+            bars[i + 1] = if (i / 4) % 2 == 0 {
+                Bar::ohlcv(time, 100.0, 102.0, 99.9, 101.5, 1.0)
+            } else {
+                Bar::ohlcv(time, 100.0, 100.1, 98.0, 99.0, 1.0)
+            };
+        }
+        let touches: Vec<Touch> = (1..bars.len() - 25)
+            .step_by(4)
+            .map(|i| {
+                let mut t = test_touch(i, 1, 100.0, 1.0);
+                t.time = bars[i].time;
+                t.pre.fill(0.0);
+                t.f.fill(if (i / 4) % 2 == 0 { 1.0 } else { -1.0 });
+                t
+            })
+            .collect();
+        let bars = Arc::new(bars);
+        let make = |ts: Vec<Touch>, close| {
+            Engine::with_touches(
+                bars.clone(),
+                Arc::new(Vec::new()),
+                ts,
+                Vec::new(),
+                &ScanConfig::default(),
+                close,
+            )
+        };
+        let p = Params {
+            entry: "limit".into(),
+            use_model: true,
+            ..plain()
+        };
+        let correct = make(touches.clone(), false).sim(&p);
+        assert!(
+            correct.prob.iter().any(|x| x.is_finite()),
+            "fixture must exercise calibration"
+        );
+        let mut altered = touches.clone();
+        for (i, t) in altered.iter_mut().enumerate() {
+            t.f.fill((i % 7) as f64 * 1000.0);
+        }
+        for ts in [touches, altered] {
+            let e = make(ts, true);
+            let first = e.sim(&p);
+            let cached = e.sim(&p);
+            assert!(Arc::ptr_eq(&first, &cached));
+            for (got, want) in first.prob.iter().zip(&correct.prob) {
+                assert_eq!(got.to_bits(), want.to_bits());
+            }
+            for (got, want) in first.r.iter().zip(&correct.r) {
+                assert_eq!(got.to_bits(), want.to_bits());
+            }
+        }
     }
 }
