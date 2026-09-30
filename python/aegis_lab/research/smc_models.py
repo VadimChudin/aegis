@@ -134,7 +134,7 @@ def random_walk(m: pd.DataFrame, seed: int) -> pd.DataFrame:
 
 
 @nb.njit(cache=True)
-def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, ote, min_risk,
+def _trade_details(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, ote, min_risk,
            max_hold, exp_bars, tick):
     """One setup in long space (d = -1 mirrors prices).
     -> entry, stop, pnl, exit code (0 stop, 1 target, 2 time, 3 end, -1 none), fill index,
@@ -148,8 +148,8 @@ def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, 
     i_fill = -1
     if mode == 4:
         if i_s >= n:
-            return 0.0, 0.0, 0.0, -1, -1, False, False
-        entry = mo[i_s] * d + tick
+            return 0.0, 0.0, 0.0, -1, -1, False, False, -1
+        entry = mo[i_s] * d + 0.05
         stop = ext * d - buf
         i_fill = i_s
     else:
@@ -181,7 +181,7 @@ def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, 
                 i_mss = i
                 break
         if i_mss < 0:
-            return 0.0, 0.0, 0.0, -1, -1, False, False
+            return 0.0, 0.0, 0.0, -1, -1, False, False, -1
         stop = low_ext - buf
         leg_hi = -1e18
         for q in range(low_i, i_mss + 1):
@@ -189,7 +189,7 @@ def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, 
             if hq > leg_hi:
                 leg_hi = hq
         if mode == 0:
-            entry = mc[i_mss] * d + tick
+            entry = mc[i_mss] * d + 0.05
             i_fill = i_mss
         else:
             if mode == 3:
@@ -203,12 +203,12 @@ def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, 
                         lim = top if mode == 1 else 0.5 * (top + bot)
                         break
                 if lim > 1e17:
-                    return 0.0, 0.0, 0.0, -1, -1, False, False
+                    return 0.0, 0.0, 0.0, -1, -1, False, False, -1
             entry = lim
             maker = True
     risk = entry - stop
     if risk < min_risk:
-        return 0.0, 0.0, 0.0, -1, -1, False, False
+        return 0.0, 0.0, 0.0, -1, -1, False, False, -1
     target = entry + rr * risk
     if tl == tl and tl - entry >= min_rr * risk:
         target = tl
@@ -221,30 +221,37 @@ def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, 
                 i_fill = i
                 break
             if hi >= target:
-                return 0.0, 0.0, 0.0, -1, -1, False, False
+                return 0.0, 0.0, 0.0, -1, -1, False, False, -1
         if i_fill < 0:
-            return 0.0, 0.0, 0.0, -1, -1, False, False
+            return 0.0, 0.0, 0.0, -1, -1, False, False, -1
         lo = ml[i_fill] if d > 0 else -mh[i_fill]
         if lo <= stop:
-            return entry, stop, stop - entry, 0, i_fill, maker, True
-    for i in range(i_fill + 1, n):
+            return entry, stop, min(stop, mo[i_fill] * d) - 0.05 - entry, 0, i_fill, maker, True, i_fill
+    for i in range(i_fill if mode == 4 else i_fill + 1, n):
         op = mo[i] * d
         hi = mh[i] if d > 0 else -ml[i]
         lo = ml[i] if d > 0 else -mh[i]
         if op <= stop:
-            return entry, stop, op - entry, 0, i_fill, maker, True
+            return entry, stop, op - 0.05 - entry, 0, i_fill, maker, True, i
         if lo <= stop:
-            return entry, stop, stop - entry, 0, i_fill, maker, True
+            return entry, stop, stop - 0.05 - entry, 0, i_fill, maker, True, i
         if op >= target:
-            return entry, stop, op - entry, 1, i_fill, maker, False
+            return entry, stop, target - entry, 1, i_fill, maker, False, i
         if hi >= target + tick:
-            return entry, stop, target - entry, 1, i_fill, maker, False
+            return entry, stop, target - entry, 1, i_fill, maker, False, i
         if i - i_fill >= max_hold:
-            return entry, stop, mc[i] * d - entry, 2, i_fill, maker, True
-    return entry, stop, mc[n - 1] * d - entry, 3, i_fill, maker, True
+            return entry, stop, mc[i] * d - 0.05 - entry, 2, i_fill, maker, True, i
+    return entry, stop, mc[n - 1] * d - 0.05 - entry, 3, i_fill, maker, True, n - 1
 
 
 # ---------------------------------------------------------------- setups
+
+
+@nb.njit(cache=True)
+def _trade(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf, fk, ote, min_risk,
+           max_hold, exp_bars, tick):
+    return _trade_details(mo, mh, ml, mc, i_s, i_dead, d, tgt, ext, mode, rr, min_rr, buf,
+                          fk, ote, min_risk, max_hold, exp_bars, tick)[:7]
 
 
 class Market:
@@ -260,7 +267,7 @@ class Market:
         self.dow = ny.dayofweek.to_numpy()
         hb = smc.resample(self.m, 3600).set_index("t")
         atr = hb.atr.reindex(pd.Index(self.t // 3600 * 3600 - 3600)).to_numpy()
-        self.atr = pd.Series(atr).ffill().bfill().to_numpy()
+        self.atr = pd.Series(atr).ffill().to_numpy()
         self.days = self._days()
 
     def _days(self) -> pd.DataFrame:
@@ -377,7 +384,7 @@ class Market:
         rows = []
         busy = -1
         for i_s, i_dead, d, tgt, ext, day in setups:
-            if i_s >= len(self.t) or i_s <= busy or self.dow[i_s] >= 5:
+            if i_s >= len(self.t) or self.dow[i_s] >= 5:
                 continue
             k = self._dix[day]
             pc, po, mid = self._pc[k], self._po[k], self._mid[k]
@@ -389,20 +396,30 @@ class Market:
                 px = self.o[i_s]
                 if (d > 0 and px > mid) or (d < 0 and px < mid):
                     continue
+            if not np.isfinite(self.atr[i_s]):
+                continue
             buf = cfg["buf"] * self.atr[i_s]
-            e, s, pnl, code, i_f, maker, mkt = _trade(
+            e, s, pnl, code, i_f, maker, mkt, i_x = _trade_details(
                 self.o, self.h, self.l, self.c, int(i_s), int(i_dead) + cfg["extra"], int(d),
                 tgt if cfg["use_tgt"] else NAN, ext if ext == ext else 0.0, mode, cfg["rr"], cfg["min_rr"], buf,
                 cfg["fk"], cfg["ote"], cfg["min_risk"], cfg["max_hold"], cfg["exp_bars"], 0.01)
             if code < 0:
                 continue
-            busy = i_f
+            busy = i_x
             fee = self.cost(i_f, abs(e), maker, mkt)
-            rows.append((self.t[i_f], d, pnl, fee, e - s, code))
-        df = pd.DataFrame(rows, columns=["t", "dir", "pnl", "fee", "risk", "exit"])
+            if self.venue == "binance":
+                fee = (smc.MAKER if maker else smc.TAKER) * abs(e) + (smc.TAKER if mkt else smc.MAKER) * abs(e + pnl)
+            rows.append((self.t[i_f], d, pnl, fee, e - s, code, self.t[i_x] + 60, self.t[i_s]))
+        df = pd.DataFrame(rows, columns=["t", "dir", "pnl", "fee", "risk", "exit", "exit_t", "armed_t"])
         df["r_gross"] = df.pnl / df.risk
         df["r_net"] = (df.pnl - df.fee) / df.risk
-        return df
+        df = df.sort_values("t", kind="stable")
+        keep, available = [], -1
+        for idx, trade in df.iterrows():
+            if trade.t >= available and trade.armed_t >= available:
+                keep.append(idx)
+                available = trade.exit_t
+        return df.loc[keep].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- search
@@ -442,7 +459,7 @@ def search(mk: Market, split: int, models=None) -> tuple[pd.DataFrame, dict]:
                 cache[key] = MODELS[model](mk, cfg)
             r = mk.run(cache[key], cfg)
             trades[len(rows)] = r
-            a, b = r[r.t < split], r[r.t >= split]
+            a, b = r[(r.t < split) & (r.exit_t <= split) & (r.exit != 3)], r[(r.t >= split) & (r.exit != 3)]
             rows.append({"model": model, **{c: cfg[c] for c in list(GRID) + ["crt_tgt"] if c in cfg},
                          "is_n": len(a), "is_g": a.r_gross.mean(), "is_r": a.r_net.mean(),
                          "oos_n": len(b), "oos_g": b.r_gross.mean(), "oos_r": b.r_net.mean(),
@@ -458,7 +475,8 @@ def walk_forward(trades: dict, months_back: int = 6, min_n: int = 10) -> pd.Data
         train, test = months[mi - months_back : mi], months[mi]
         best, score = None, -np.inf
         for k, r in tagged.items():
-            tr = r[r.m.isin(train)]
+            cutoff = pd.Timestamp(test, tz="UTC").value // 10**9
+            tr = r[r.m.isin(train) & (r.exit_t <= cutoff) & (r.exit != 3)]
             if len(tr) >= min_n and tr.r_net.mean() > score:
                 best, score = k, tr.r_net.mean()
         if best is None:
@@ -469,7 +487,7 @@ def walk_forward(trades: dict, months_back: int = 6, min_n: int = 10) -> pd.Data
 
 
 def report(df: pd.DataFrame, trades: dict, label: str, months_back: int = 6) -> None:
-    ok = df[(df.is_n >= 30) & (df.oos_n >= 15)]
+    ok = df[(df.is_n >= 30)]
     print(f"\n==== {label}: {len(df)} settings, {len(ok)} with >= 30 / 15 trades")
     print(ok.groupby("model")[["is_n", "oos_n", "is_g", "is_r", "oos_g", "oos_r"]].median().round(3).to_string())
     print(ok.groupby("entry")[["is_g", "is_r", "oos_g", "oos_r"]].median().round(3).to_string())

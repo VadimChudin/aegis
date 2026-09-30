@@ -239,6 +239,7 @@ fn main() {
                 "out_of_sample": r.out_of_sample, "windows": r.windows, "params": r.params,
                 "convergence": r.convergence, "baseline": r.baseline, "evaluations": r.evaluations,
                 "validation": v, "seconds": t0.elapsed().as_secs_f64(),
+                "backend": r.backend, "pareto": r.pareto, "operator_stats": r.operator_stats,
             });
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
         }

@@ -51,7 +51,7 @@ def derived(z: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
 
 
 @nb.njit(cache=True)
-def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode, n, depth, grid_depth,
+def _sim_details(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode, n, depth, grid_depth,
          buf, rr, tgt_liq, min_rr, be, trail_start, trail, max_hold, fk, retest_m, tick):
     """Long-space simulation of one zone.
     -> qty, avg, stop0, pnl ($ x qty), maker entry, market exit, exit code, entry index.
@@ -106,8 +106,8 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
         else:
             op, hi, lo, cl = -mo[i], -ml[i], -mh[i], -mc[i]
         if qty == 0.0:
-            if t_ch < 0 and (i >= i_exp or (hour_end[i] and cl < far)):
-                return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1
+            if t_ch < 0 and (i >= i_exp or (i > i0 and hour_end[i - 1] and mc[i - 1] * d < far)):
+                return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1, -1
             if mode <= 1:
                 if active[i]:
                     for k in range(nl):
@@ -120,12 +120,12 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
                     risk = cost / qty - stop
                     best = cost / qty
                     if lo <= stop:
-                        return qty, cost / qty, stop, qty * stop - cost, True, True, 0, t_in
+                        return qty, cost / qty, stop, qty * (min(stop, op) - 0.05) - cost, True, True, 0, t_in, i
                 continue
             if t_ch >= 0:
                 # waiting for the retest of the broken swing (mode 3)
                 if i - t_ch > retest_m or hi >= target:
-                    return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1
+                    return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1, -1
                 if lo <= lim - tick:
                     qty = 1.0
                     cost = lim
@@ -134,7 +134,7 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
                     risk = lim - stop
                     best = lim
                     if lo <= stop:
-                        return qty, lim, stop, stop - lim, True, True, 0, t_in
+                        return qty, lim, stop, min(stop, op) - 0.05 - lim, True, True, 0, t_in, i
                 continue
             if lo <= edge:
                 inside = True
@@ -157,11 +157,11 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
                     last_sh = hj
                     last_sh_i = j
             if low_in < far - buf:
-                return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1
+                return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1, -1
             if active[i] and last_sh_i >= 0 and last_sh_i < low_i and cl > last_sh:
                 stop = low_in - buf
                 if mode == 2:
-                    e = cl + tick
+                    e = cl + 0.05
                     if e - stop <= 0.02:
                         continue
                     qty = 1.0
@@ -183,7 +183,7 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
                         target = lq - tick
             continue
         # in a position
-        if mode <= 1 and hi < target and active[i]:
+        if mode <= 1 and active[i]:
             for k in range(nl):
                 if not filled[k] and lo <= prices[k] - tick:
                     filled[k] = True
@@ -200,10 +200,10 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
             # a stop moved on the previous bar's high can be gapped through at this bar's open
             px = min(stop, op) if i > t_in else stop
             stop0 = far - buf if mode <= 1 else init_stop
-            return qty, avg, stop0, qty * px - cost, mode != 2, True, code, t_in
+            return qty, avg, stop0, qty * (px - 0.05) - cost, mode != 2, True, code, t_in, i
         if hi >= target + tick:
             stop0 = far - buf if mode <= 1 else init_stop
-            return qty, avg, stop0, qty * target - cost, mode != 2, False, 1, t_in
+            return qty, avg, stop0, qty * target - cost, mode != 2, False, 1, t_in, i
         if hi > best:
             best = hi
         if be > 0 and best >= avg + be * risk and stop < avg:
@@ -213,11 +213,19 @@ def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode
             if ns > stop:
                 stop = ns
         if mt[i] - mt[t_in] >= max_hold:
-            return qty, avg, far - buf if mode <= 1 else init_stop, qty * cl - cost, mode != 2, True, 4, t_in
+            return qty, avg, far - buf if mode <= 1 else init_stop, qty * (cl - 0.05) - cost, mode != 2, True, 4, t_in, i
     if qty > 0.0:
         cl = mc[nm - 1] if d > 0 else -mc[nm - 1]
-        return qty, cost / qty, far - buf if mode <= 1 else init_stop, qty * cl - cost, mode != 2, True, 5, t_in
-    return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1
+        return qty, cost / qty, far - buf if mode <= 1 else init_stop, qty * (cl - 0.05) - cost, mode != 2, True, 5, t_in, nm - 1
+    return 0.0, 0.0, 0.0, 0.0, False, False, -1, -1, -1
+
+
+@nb.njit(cache=True)
+def _sim(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq, mode, n, depth, grid_depth,
+         buf, rr, tgt_liq, min_rr, be, trail_start, trail, max_hold, fk, retest_m, tick):
+    return _sim_details(mt, mo, mh, ml, mc, hour_end, active, i0, i_exp, d, top, bot, liq,
+                        mode, n, depth, grid_depth, buf, rr, tgt_liq, min_rr, be, trail_start,
+                        trail, max_hold, fk, retest_m, tick)[:8]
 
 
 class Search(smc.Lab):
@@ -246,29 +254,34 @@ class Search(smc.Lab):
             if i0 >= len(self.mt):
                 continue
             buf = cfg["buf"] * r.atr
-            qty, avg, stop0, pnl, maker_in, mkt_out, ex, ti = _sim(
+            qty, avg, stop0, pnl, maker_in, mkt_out, ex, ti, tx = _sim_details(
                 self.mt, self.mo, self.mh, self.ml, self.mc, he, active, i0, i1, r.dir, r.top, r.bot, r.liq, mode,
                 cfg["n"], cfg["depth"], cfg["grid_depth"], buf, cfg["rr"], cfg["tgt_liq"], cfg["min_rr"],
                 cfg["be"], cfg["trail_start"], cfg["trail"], cfg["max_hold"], cfg["fk"], cfg["retest_m"], 0.01)
             if qty <= 0:
                 continue
             # one position per direction: the same move often sits in several overlapping zones
-            if ti <= taken_until[r.dir]:
-                continue
             if mode == 1:
                 plan = self.plan_risk(cfg, r, buf)
             else:
                 plan = avg - stop0 if mode == 0 else abs(avg - stop0)
             if plan < cfg["min_risk"]:
                 continue
-            taken_until[r.dir] = ti + 1
+            taken_until[r.dir] = tx
             px = abs(avg)
-            fee = ((smc.MAKER if maker_in else smc.TAKER) * qty + (smc.TAKER if mkt_out else smc.MAKER) * qty) * px
-            rows.append((self.mt[ti], r.dir, pnl, fee, plan * qty if mode != 1 else plan, ex))
-        df = pd.DataFrame(rows, columns=["t", "dir", "pnl", "fee", "risk", "exit"])
+            fee = ((smc.MAKER if maker_in else smc.TAKER) * qty * px +
+                   (smc.TAKER if mkt_out else smc.MAKER) * qty * abs(avg + pnl / qty))
+            rows.append((self.mt[ti], r.dir, pnl, fee, plan * qty if mode != 1 else plan, ex, self.mt[tx] + 60, r.valid))
+        df = pd.DataFrame(rows, columns=["t", "dir", "pnl", "fee", "risk", "exit", "exit_t", "armed_t"])
         df["r_gross"] = df.pnl / df.risk
         df["r_net"] = (df.pnl - df.fee) / df.risk
-        return df.sort_values("t").reset_index(drop=True)
+        df = df.sort_values("t", kind="stable")
+        keep, available = [], -1
+        for idx, trade in df.iterrows():
+            if trade.t >= available and trade.armed_t >= available:
+                keep.append(idx)
+                available = trade.exit_t
+        return df.loc[keep].reset_index(drop=True)
 
 
 smc.MODES_ALL = {"limit": 0, "grid": 1, "choch": 2, "choch_limit": 3}
@@ -309,14 +322,14 @@ def main() -> None:
             print(f"{k} settings", flush=True)
     rows = []
     for k, (cfg, r) in enumerate(zip(cfgs, runs)):
-        ins, oos = r[r.t < smc.SPLIT], r[r.t >= smc.SPLIT]
+        ins, oos = r[(r.t < smc.SPLIT) & (r.exit_t <= smc.SPLIT) & (r.exit != 5)], r[(r.t >= smc.SPLIT) & (r.exit != 5)]
         rows.append({"id": k, **{c: ("+".join(v) if isinstance(v, tuple) else v) for c, v in cfg.items()},
                      "is_n": len(ins), "is_g": ins.r_gross.mean(), "is_r": ins.r_net.mean(), "is_sum": ins.r_net.sum(),
                      "oos_n": len(oos), "oos_g": oos.r_gross.mean(), "oos_r": oos.r_net.mean(),
                      "oos_sum": oos.r_net.sum(), "oos_win": (oos.r_net > 0).mean()})
     df = pd.DataFrame(rows)
     df.to_csv(OUT / "smc_search.csv", index=False)
-    ok = df[(df.is_n >= 30) & (df.oos_n >= 15)]
+    ok = df[(df.is_n >= 30)]
     print(f"\nsettings with >= 30 trades in sample and >= 15 out of sample: {len(ok)}")
     top = ok.sort_values("is_r", ascending=False).head(20)
     cols = ["id", "htf", "kinds", "mode", "rr", "tgt_liq", "be", "trail", "trend", "pd", "killzone", "min_risk",
@@ -337,7 +350,8 @@ def main() -> None:
         train, test = months[mi - 3 : mi], months[mi]
         score = []
         for r in trades:
-            tr = r[r.m.isin(train)]
+            cut = pd.Timestamp(test, tz="UTC").value // 10**9
+            tr = r[r.m.isin(train) & (r.exit_t <= cut) & (r.exit != 5)]
             score.append(tr.r_net.sum() if len(tr) >= 15 else -np.inf)
         best = int(np.argmax(score))
         te = trades[best][trades[best].m == test]

@@ -1,0 +1,169 @@
+{
+  "base_commit": "ab651a9ddcbd09aa05b5bbdd8956ce005fd61250",
+  "backend": "amalgam_style_ensemble",
+  "rust_unit_tests": 91,
+  "rust_integration_tests": 7,
+  "python_tests": 7,
+  "clippy_warnings_denied": true,
+  "rustfmt_check": true,
+  "javascript_syntax_checked": [
+    "bounce.js",
+    "i18n-dict.js"
+  ],
+  "seed7_repeat_matches": true,
+  "market_scope": "Binance XAUUSDT Jun-Aug 2026 5m+1m; previously studied history; model OFF; seconds OFF; not pristine holdout",
+  "market_results": [
+    {
+      "seed": 7,
+      "trades": 1572,
+      "avg_r": -1.994098476838007,
+      "total_r": -3134.722805589347,
+      "win_rate": 0.2595419847328244,
+      "random_trades": 1476,
+      "random_avg_r": -2.0998642450599765,
+      "evaluations_per_method": 2060,
+      "backend": "amalgam_style_ensemble",
+      "pareto_count": 13,
+      "operator_stats": [
+        {
+          "allocation": 4,
+          "name": "nsga2_sbx_mutation",
+          "proposed": 16,
+          "survived": 10
+        },
+        {
+          "allocation": 3,
+          "name": "differential_evolution",
+          "proposed": 14,
+          "survived": 5
+        },
+        {
+          "allocation": 5,
+          "name": "particle_swarm",
+          "proposed": 17,
+          "survived": 13
+        },
+        {
+          "allocation": 4,
+          "name": "adaptive_gaussian_metropolis",
+          "proposed": 17,
+          "survived": 12
+        }
+      ]
+    },
+    {
+      "seed": 21,
+      "trades": 1448,
+      "avg_r": -2.1063985623575885,
+      "total_r": -3050.065118293788,
+      "win_rate": 0.2534530386740331,
+      "random_trades": 1511,
+      "random_avg_r": -2.0662506364906394,
+      "evaluations_per_method": 2060,
+      "backend": "amalgam_style_ensemble",
+      "pareto_count": 11,
+      "operator_stats": [
+        {
+          "allocation": 4,
+          "name": "nsga2_sbx_mutation",
+          "proposed": 16,
+          "survived": 8
+        },
+        {
+          "allocation": 4,
+          "name": "differential_evolution",
+          "proposed": 16,
+          "survived": 6
+        },
+        {
+          "allocation": 5,
+          "name": "particle_swarm",
+          "proposed": 18,
+          "survived": 14
+        },
+        {
+          "allocation": 3,
+          "name": "adaptive_gaussian_metropolis",
+          "proposed": 14,
+          "survived": 5
+        }
+      ]
+    },
+    {
+      "seed": 99,
+      "trades": 1539,
+      "avg_r": -1.9820738435660312,
+      "total_r": -3050.411645248122,
+      "win_rate": 0.244314489928525,
+      "random_trades": 1639,
+      "random_avg_r": -2.008841091646522,
+      "evaluations_per_method": 2060,
+      "backend": "amalgam_style_ensemble",
+      "pareto_count": 15,
+      "operator_stats": [
+        {
+          "allocation": 3,
+          "name": "nsga2_sbx_mutation",
+          "proposed": 15,
+          "survived": 5
+        },
+        {
+          "allocation": 4,
+          "name": "differential_evolution",
+          "proposed": 15,
+          "survived": 5
+        },
+        {
+          "allocation": 4,
+          "name": "particle_swarm",
+          "proposed": 16,
+          "survived": 9
+        },
+        {
+          "allocation": 5,
+          "name": "adaptive_gaussian_metropolis",
+          "proposed": 18,
+          "survived": 14
+        }
+      ]
+    }
+  ],
+  "archive_checksums": [
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/5m/XAUUSDT-5m-2026-06.zip",
+      "sha256": "389da9fa83952d57d791bdc12d42e884fabbf10a3818ce947dbcbfe64940f181",
+      "rows": 8640
+    },
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/5m/XAUUSDT-5m-2026-07.zip",
+      "sha256": "8697503c98a260c08bb84db6e1274a1e917c74210154ec5fb014fe9ae939e62e",
+      "rows": 8928
+    },
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/5m/XAUUSDT-5m-2026-08.zip",
+      "sha256": "4c20bf64c67c63f124c975565426ddd1f63933ebc47ba6d2b40262bcad56aaea",
+      "rows": 8928
+    },
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/1m/XAUUSDT-1m-2026-06.zip",
+      "sha256": "d6795c80419b2017b5e4c0e5ebb784b43469e7a511429248aa8be61d799770d0",
+      "rows": 43200
+    },
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/1m/XAUUSDT-1m-2026-07.zip",
+      "sha256": "590a20bfb88a9b509175a3895f81f1aed0a03d0bb1d0b6d000cdc003af7a2455",
+      "rows": 44640
+    },
+    {
+      "key": "data/futures/um/monthly/klines/XAUUSDT/1m/XAUUSDT-1m-2026-08.zip",
+      "sha256": "cc2c746371e88aabf9b9808ddc88867117bdaf68e875e54156b4a68d51a7fc1d",
+      "rows": 44640
+    }
+  ],
+  "limitations": [
+    "Mixed-variable diagonal-covariance AMALGAM adaptation, not certified exact original implementation",
+    "No GUI packaging/full Tauri workspace build in sandbox",
+    "No measured bid/ask queue/latency/funding or full margin/liquidation model",
+    "Market run is deliberately small budget and loss-making; no profitable strategy demonstrated"
+  ]
+}

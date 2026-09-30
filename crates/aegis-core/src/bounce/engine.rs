@@ -28,6 +28,8 @@ const CACHE_ENTRIES: usize = 256;
 pub struct Trade {
     pub entry_time: i64,
     pub exit_time: i64,
+    /// First-leg settlement; distinct from the combined exit when a flip opens.
+    pub first_exit_time: i64,
     pub dir: i8,
     pub entry: f64,
     pub exit: f64,
@@ -59,6 +61,7 @@ impl Trade {
         Trade {
             entry_time: 0,
             exit_time: 0,
+            first_exit_time: 0,
             dir: 0,
             entry: f64::NAN,
             exit: f64::NAN,
@@ -199,7 +202,9 @@ pub fn simulate_in(bars: &[Bar], mins: &[Minute], t: &Touch, p: &Params) -> Opti
                 let fm = &m[k];
                 let adverse = side(if d > 0.0 { fm.low } else { fm.high }, sp(b));
                 if d * (adverse - stop) <= 0.0 {
-                    Some((stop - d * p.slippage, "sl"))
+                    let open = side(fm.open, sp(b));
+                    let fill = if d * (open - stop) <= 0.0 { open } else { stop };
+                    Some((fill - d * p.slippage, "sl"))
                 } else {
                     m[k + 1..]
                         .iter()
@@ -208,8 +213,11 @@ pub fn simulate_in(bars: &[Bar], mins: &[Minute], t: &Touch, p: &Params) -> Opti
             }
             // No 1m data: the bar's extreme may stop the trade; a target is not counted because
             // the high may have come before the fill.
-            None => (d * (side(if d > 0.0 { b.low } else { b.high }, sp(b)) - stop) <= 0.0)
-                .then_some((stop - d * p.slippage, "sl")),
+            None => (d * (side(if d > 0.0 { b.low } else { b.high }, sp(b)) - stop) <= 0.0).then(|| {
+                let open = side(b.open, sp(b));
+                let fill = if d * (open - stop) <= 0.0 { open } else { stop };
+                (fill - d * p.slippage, "sl")
+            }),
         };
         if let Some((px, o)) = res {
             (exit, j_exit, outcome) = (px, t.i, o);
@@ -233,6 +241,7 @@ pub fn simulate_in(bars: &[Bar], mins: &[Minute], t: &Touch, p: &Params) -> Opti
         Trade {
             entry_time: if on_close { b.time + 300 } else { b.time },
             exit_time: bars[j_exit].time + 300,
+            first_exit_time: bars[j_exit].time + 300,
             dir: t.dir,
             entry,
             exit,
@@ -286,6 +295,8 @@ pub struct Sim {
     pub r: Vec<f32>,
     /// Bar index of the exit.
     pub exit: Vec<u32>,
+    /// Exact label settlement timestamp, including the second-engine exit.
+    pub exit_time: Vec<i64>,
     /// Calibrated win probability (NaN when unknown).
     pub prob: Vec<f32>,
 }
@@ -397,29 +408,85 @@ pub struct Money {
     pub capped: f64,
 }
 
+/// Settlement events, never realizing an entire flip chain on its final day.
+pub(crate) fn realized_legs(t: &Trade) -> Vec<(i64, f64)> {
+    if t.flip_entry.is_finite() && t.flip_r.is_finite() {
+        vec![(t.first_exit_time, t.r - t.flip_r), (t.exit_time, t.flip_r)]
+    } else {
+        vec![(t.exit_time, t.r)]
+    }
+}
+
 pub fn money(trades: &[Trade], risk_pct: f64, max_leverage: f64) -> Money {
-    let mut by_exit: Vec<&Trade> = trades.iter().collect();
-    by_exit.sort_by_key(|t| t.exit_time);
-    let f = risk_pct / 100.0;
+    // Realized-equity sizing, not a portfolio margin simulator. Fix each leg's
+    // dollar risk at entry, then add its net PnL at settlement. In particular,
+    // overlapping positions cannot resize retroactively at another trade's exit.
+    // Short-sale proceeds are not spendable equity: both directions add only
+    // net PnL. Partial cash flows are deferred to the leg's final settlement.
+    let f = if risk_pct.is_finite() {
+        (risk_pct / 100.0).max(0.0)
+    } else {
+        0.0
+    };
+    let cap = if max_leverage.is_finite() {
+        max_leverage.max(0.0)
+    } else {
+        0.0
+    };
     let (mut eq, mut peak, mut dd, mut capped) = (1.0f64, 1.0f64, 0.0f64, 0usize);
     let mut lev: Vec<f64> = Vec::with_capacity(trades.len());
-    for t in by_exit {
-        let risk = (t.entry - t.sl).abs();
-        if risk.is_nan() || risk <= 0.0 || !t.r.is_finite() {
+    // (entry time, exit time, entry price, price risk, net R)
+    let mut legs = Vec::new();
+    for t in trades {
+        let flipped = t.flip_entry.is_finite() && t.flip_r.is_finite();
+        let first_end = if flipped { t.first_exit_time } else { t.exit_time };
+        legs.push((
+            t.entry_time,
+            first_end,
+            t.entry,
+            (t.entry - t.sl).abs(),
+            if flipped { t.r - t.flip_r } else { t.r },
+        ));
+        if flipped {
+            legs.push((
+                t.flip_time,
+                t.exit_time,
+                t.flip_entry,
+                (t.flip_entry - t.flip_sl).abs(),
+                t.flip_r,
+            ));
+        }
+    }
+    let mut events = Vec::new();
+    for (i, &(start, end, price, risk, r)) in legs.iter().enumerate() {
+        if !price.is_finite() || price <= 0.0 || !risk.is_finite() || risk <= 0.0 || !r.is_finite() || end < start {
             continue;
         }
-        // Notional / equity = (f · equity / risk) · price / equity.
-        let need = f * t.entry / risk;
-        lev.push(need);
-        let used = if need > max_leverage {
-            capped += 1;
-            f * max_leverage / need
+        // At equal timestamps, existing closes settle before new entries.
+        events.push((start, 1u8, i));
+        // Same-second positions still enter before their own settlement.
+        // Older positions close before new entries at the timestamp.
+        events.push((end, if end == start { 2u8 } else { 0u8 }, i));
+    }
+    events.sort_unstable();
+    let mut pnl = vec![0.0; legs.len()];
+    for (_, phase, i) in events {
+        let (_, _, price, risk, r) = legs[i];
+        if phase == 1 {
+            let need = f * price / risk;
+            lev.push(need);
+            let used = if need > cap {
+                capped += 1;
+                f * cap / need
+            } else {
+                f
+            };
+            pnl[i] = eq * used * r;
         } else {
-            f
-        };
-        eq *= (1.0 + used * t.r).max(0.0);
-        peak = peak.max(eq);
-        dd = dd.max(1.0 - eq / peak);
+            eq = (eq + pnl[i]).max(0.0);
+            peak = peak.max(eq);
+            dd = dd.max(1.0 - eq / peak);
+        }
     }
     lev.sort_by(f64::total_cmp);
     Money {
@@ -636,6 +703,19 @@ impl Engine {
         e
     }
 
+    /// Reuse the scanned touches, but fit scores on the requested causal entry basis.
+    pub(crate) fn for_entry_mode(&self, close_entry: bool) -> Engine {
+        Engine::with_touches(
+            self.bars.clone(),
+            self.minutes.clone(),
+            self.touches.clone(),
+            self.pending.clone(),
+            &self.scan,
+            close_entry,
+        )
+        .with_seconds(self.seconds.clone())
+    }
+
     /// Adds 1-second candles for settings with `sec_engine` on.
     pub fn with_seconds(mut self, seconds: Arc<Vec<Sec>>) -> Engine {
         self.seconds = seconds;
@@ -711,33 +791,23 @@ impl Engine {
     }
 
     fn key(p: &Params) -> String {
-        let base = format!(
-            "{:.4}|{:.4}|{:.4}|{}|{:.4}|{:.4}|{:.4}|{:.4}|{:.4}|{:.4}|{}",
+        // Lossless identity: nearby accepted settings must never share outcomes.
+        let values = [
             p.spread,
             p.sl_atr,
             p.tp_r,
-            p.max_bars,
             p.maker_bps,
             p.taker_bps,
             p.slippage,
             p.fill_through,
             p.min_risk_atr,
             p.max_risk_atr,
-            p.on_close()
-        );
-        if !p.sec_engine {
-            return base;
-        }
-        format!(
-            "{base}|s|{}|{:.1}|{:.3}|{:.3}|{:.3}|{:.3}|{:.1}|{}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{:.3}|{:.3}",
-            p.absorb,
             p.abs_window,
             p.abs_vol,
             p.abs_hold_atr,
             p.abs_confirm_atr,
             p.abs_stop_atr,
             p.abs_wait,
-            p.abs_limit,
             p.abs_limit_atr,
             p.dens_eat,
             p.be_r,
@@ -746,10 +816,23 @@ impl Engine {
             p.part_frac,
             p.part_r,
             p.eat_vol,
-            p.flip,
             p.flip_sl_atr,
-            p.flip_tp_r
-        )
+            p.flip_tp_r,
+        ];
+        let mut key = format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            p.max_bars,
+            p.on_close(),
+            p.sec_engine,
+            p.absorb,
+            p.abs_limit,
+            p.flip,
+            values.len()
+        );
+        for v in values {
+            key.push_str(&format!("|{:016x}", v.to_bits()));
+        }
+        key
     }
 
     /// Outcomes and calibrated probabilities of every touch for `p`'s trade setting (cached).
@@ -759,18 +842,30 @@ impl Engine {
             return s.clone();
         }
         let one = |t: &Touch| match self.simulate(t, p) {
-            Some((tr, j)) => (tr.r as f32, j as u32),
-            None => (f32::NAN, t.i as u32),
+            Some((tr, j)) => (tr.r as f32, (j as u32, tr.exit_time)),
+            None => (f32::NAN, (t.i as u32, t.time)),
         };
         // The 1-second engine is ~100× slower per touch; spread it over the cores.
-        let (r, exit): (Vec<f32>, Vec<u32>) = if p.sec_engine {
+        let (r, settled): (Vec<f32>, Vec<(u32, i64)>) = if p.sec_engine {
             use rayon::prelude::*;
             self.touches.par_iter().map(one).unzip()
         } else {
             self.touches.iter().map(one).unzip()
         };
-        let prob = self.calibrate(&r, &exit);
-        let sim = Arc::new(Sim { r, exit, prob });
+        let (exit, exit_time): (Vec<u32>, Vec<i64>) = settled.into_iter().unzip();
+        // A cache key distinguishes the entry mode, but its model must also do so:
+        // close-bar features are unavailable to a resting limit at the bar's start.
+        let prob = if p.on_close() == self.close_entry {
+            self.calibrate(&r, &exit)
+        } else {
+            self.for_entry_mode(p.on_close()).calibrate(&r, &exit)
+        };
+        let sim = Arc::new(Sim {
+            r,
+            exit,
+            exit_time,
+            prob,
+        });
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= CACHE_ENTRIES {
             cache.clear();
@@ -813,18 +908,35 @@ impl Engine {
 
     /// Touches taken in `[from_i, to_i)` (bar indices) and touches that passed all filters.
     pub fn select(&self, p: &Params, sim: &Sim, from_i: usize, to_i: usize) -> (Vec<usize>, Vec<usize>) {
+        self.select_labels(p, sim, from_i, to_i, false)
+    }
+
+    /// GA windows admit only settled labels. Apply the cutoff before selection:
+    /// unavailable outcomes must not reserve slots or enter the daily loss ledger.
+    fn select_labels(
+        &self,
+        p: &Params,
+        sim: &Sim,
+        from_i: usize,
+        to_i: usize,
+        settled_only: bool,
+    ) -> (Vec<usize>, Vec<usize>) {
         let mask = p.kind_mask();
         let filters = p.compiled();
         let max_open = p.max_open.max(1);
         let mut open: Vec<(u32, f64, i8)> = Vec::new();
-        // Daily loss limit: (day, bar of exit, R) of today's trades; only closed ones count.
-        let mut today: Vec<(i64, u32, f64)> = Vec::new();
+        // Daily loss ledger is keyed by realization day, not entry day. Keep
+        // pending overnight exits until their day arrives; only closed labels count.
+        let mut today: Vec<(i64, i64, f64)> = Vec::new();
         let (mut taken, mut passed) = (Vec::new(), Vec::new());
         let lo = self.touches.partition_point(|t| t.i < from_i);
         for k in lo..self.touches.len() {
             let t = &self.touches[k];
             if t.i >= to_i {
                 break;
+            }
+            if settled_only && sim.exit[k] as usize >= to_i {
+                continue;
             }
             if !p.passes_with(t, mask, &filters) {
                 continue;
@@ -843,12 +955,20 @@ impl Engine {
             }
             if p.day_stop_r > 0.0 {
                 let day = t.time.div_euclid(86_400);
-                today.retain(|x| x.0 == day);
-                let lost: f64 = today.iter().filter(|x| (x.1 as usize) < t.i).map(|x| x.2).sum();
+                today.retain(|x| x.0 >= day);
+                let lost: f64 = today.iter().filter(|x| x.0 == day && x.1 <= t.time).map(|x| x.2).sum();
                 if lost <= -p.day_stop_r {
                     continue;
                 }
-                today.push((day, sim.exit[k], sim.r[k] as f64));
+                if p.sec_engine && p.flip {
+                    if let Some((tr, _)) = self.simulate(t, p) {
+                        for (time, r) in realized_legs(&tr) {
+                            today.push((time.div_euclid(86_400), time, r));
+                        }
+                    }
+                } else {
+                    today.push((sim.exit_time[k].div_euclid(86_400), sim.exit_time[k], sim.r[k] as f64));
+                }
             }
             open.push((sim.exit[k], t.level, t.dir));
             taken.push(k);
@@ -869,7 +989,7 @@ impl Engine {
     /// Totals for the GA: no allocation of trade records.
     pub fn quick(&self, p: &Params, from_i: usize, to_i: usize) -> Quick {
         let sim = self.sim(p);
-        let (taken, _) = self.select(p, &sim, from_i, to_i);
+        let (taken, _) = self.select_labels(p, &sim, from_i, to_i, true);
         let (a, z) = self.range_times(from_i, to_i);
         let mut q = Quick {
             days: calendar_days(a, z),
@@ -891,7 +1011,56 @@ impl Engine {
         q
     }
 
-    /// Full trade records of the touches taken in a range.
+    /// Settled training records for GA drawdown/downside evaluation. Like
+    /// `quick`, purge exits at or beyond `to_i` BEFORE selection so unavailable
+    /// labels cannot consume open slots or influence daily stops. Simulation
+    /// uses the full tape; crossing trades are excluded, never forcibly closed.
+    pub fn training_trades(&self, p: &Params, from_i: usize, to_i: usize) -> Vec<Trade> {
+        let sim = self.sim(p);
+        let (taken, _) = self.select_labels(p, &sim, from_i, to_i, true);
+        taken
+            .into_iter()
+            .filter_map(|k| {
+                let (mut tr, exit) = self.simulate(&self.touches[k], p)?;
+                if exit >= to_i {
+                    return None;
+                }
+                tr.prob = sim.prob[k] as f64;
+                Some(tr)
+            })
+            .collect()
+    }
+
+    /// Filtered, simulated candidates without portfolio admission. Needed when
+    /// one chronological admission ledger spans several walk-forward folds.
+    pub fn candidate_trades(&self, p: &Params, from_i: usize, to_i: usize) -> Vec<Trade> {
+        let sim = self.sim(p);
+        let mask = p.kind_mask();
+        let filters = p.compiled();
+        let lo = self.touches.partition_point(|t| t.i < from_i);
+        self.touches
+            .iter()
+            .enumerate()
+            .skip(lo)
+            .take_while(|(_, t)| t.i < to_i)
+            .filter_map(|(k, t)| {
+                if !p.passes_with(t, mask, &filters) {
+                    return None;
+                }
+                let prob = sim.prob[k];
+                if p.use_model && (!prob.is_finite() || (prob as f64) < p.min_prob) {
+                    return None;
+                }
+                let (mut tr, _) = self.simulate(t, p)?;
+                tr.prob = prob as f64;
+                Some(tr)
+            })
+            .collect()
+    }
+
+    /// Full trade records of the touches taken in a range. This entry-window
+    /// API intentionally permits exits beyond the range for OOS carry. Training
+    /// fitness callers must use `training_trades` instead.
     pub fn trades(&self, p: &Params, from_i: usize, to_i: usize) -> Vec<Trade> {
         let sim = self.sim(p);
         let (taken, _) = self.select(p, &sim, from_i, to_i);
@@ -911,6 +1080,9 @@ impl Engine {
     }
 
     pub fn report(&self, p: &Params) -> Report {
+        if p.on_close() != self.close_entry {
+            return self.for_entry_mode(p.on_close()).report(p);
+        }
         let n = self.bars.len();
         let sim = self.sim(p);
         let (taken, passed) = self.select(p, &sim, 0, n);
@@ -997,6 +1169,9 @@ impl Engine {
     /// Expected entries after the last bar: a score model trained on the last 4 months, and the
     /// calibration of the last 4 months for `p`'s trade setting.
     pub fn live(&self, p: &Params) -> LiveReport {
+        if p.on_close() != self.close_entry {
+            return self.for_entry_mode(p.on_close()).live(p);
+        }
         let last = self.bars.last().copied().unwrap_or(Bar::ohlcv(0, 0., 0., 0., 0., 0.));
         let n = self.touches.len();
         let since = last.time - 122 * 86_400;
@@ -1288,11 +1463,311 @@ mod tests {
         assert!(e2.quick(&free, 0, bars.len()).sum < a);
     }
 
+    fn test_touch(i: usize, dir: i8, level: f64, atr: f64) -> Touch {
+        Touch {
+            i,
+            time: i as i64 * 300,
+            dir,
+            level,
+            kinds: 1,
+            atr,
+            fill: level,
+            f: [f64::NAN; super::super::NF],
+            pre: [f64::NAN; super::super::NF],
+        }
+    }
+
+    fn test_engine(bars: Vec<Bar>, touches: Vec<Touch>) -> Engine {
+        let mut e = Engine::new(Arc::new(bars), &ScanConfig::default(), false);
+        e.scores = vec![f64::NAN; touches.len()];
+        e.month_of = vec![0; touches.len()];
+        e.touches = touches;
+        e
+    }
+
+    #[test]
+    fn quick_cutoff_is_invariant_to_mutated_post_cutoff_bars() {
+        let mut bars: Vec<_> = (0..10)
+            .map(|i| Bar::ohlcv(i * 300, 100.0, 100.1, 99.9, 100.0, 1.0))
+            .collect();
+        bars[2] = Bar::ohlcv(600, 100.0, 101.2, 100.0, 101.0, 1.0);
+        let p = Params {
+            tp_r: 2.0,
+            max_bars: 9,
+            max_open: 1,
+            day_stop_r: 1.0,
+            maker_bps: 0.0,
+            taker_bps: 0.0,
+            slippage: 0.0,
+            fill_through: 0.0,
+            ..plain()
+        };
+        // Earlier short remains open across the cutoff; the later long settles
+        // inside it. The unavailable short must not consume its selection slot.
+        let touches = vec![test_touch(0, -1, 100.0, 10.0), test_touch(1, 1, 100.0, 1.0)];
+        let mut loss_bars = bars.clone();
+        loss_bars[7] = Bar::ohlcv(2100, 106.0, 106.1, 105.9, 106.0, 1.0);
+        let mut win_bars = bars;
+        win_bars[7] = Bar::ohlcv(2100, 89.0, 89.1, 88.9, 89.0, 1.0);
+        let a = test_engine(loss_bars, touches.clone());
+        let b = test_engine(win_bars, touches);
+        let sa = a.sim(&p);
+        let sb = b.sim(&p);
+        assert!(sa.exit[0] >= 6 && sb.exit[0] >= 6);
+        assert!(
+            sa.r[0] < 0.0 && sb.r[0] > 0.0,
+            "mutation must change the unavailable label"
+        );
+        let qa = a.quick(&p, 0, 6);
+        let qb = b.quick(&p, 0, 6);
+        assert_eq!(qa.n, 1);
+        assert!((qa.sum - 2.0).abs() < 1e-6);
+        assert_eq!(
+            (qa.n, qa.wins, qa.sum, qa.sumsq, qa.dsum, qa.dsumsq),
+            (qb.n, qb.wins, qb.sum, qb.sumsq, qb.dsum, qb.dsumsq)
+        );
+        assert_eq!(a.select_labels(&p, &sa, 0, 6, true).0, vec![1]);
+        assert_eq!(sa.exit[1], 2);
+        assert!(a.training_trades(&p, 0, 2).is_empty());
+        assert_eq!(a.quick(&p, 0, 2).n, 0);
+        let ta = a.training_trades(&p, 0, 6);
+        let tb = b.training_trades(&p, 0, 6);
+        assert_eq!(ta.len(), qa.n);
+        assert_eq!(ta.len(), tb.len());
+        for (left, right) in ta.iter().zip(&tb) {
+            assert_eq!(
+                (left.entry_time, left.exit_time, left.r, left.outcome),
+                (right.entry_time, right.exit_time, right.r, right.outcome)
+            );
+            assert!(left.exit_time <= a.bars[5].time + 300);
+        }
+        // Preserve the explicit OOS carry behavior of the old entry-window API.
+        let carry_a = a.trades(&p, 0, 6);
+        let carry_b = b.trades(&p, 0, 6);
+        assert_eq!(carry_a.len(), 1);
+        assert!(carry_a[0].exit_time > a.bars[5].time + 300);
+        assert!(carry_a[0].r < 0.0 && carry_b[0].r > 0.0);
+        // Boundary is strict, not <=: an exit on to_i is unavailable.
+        let mut boundary = Sim {
+            r: sa.r.clone(),
+            exit: sa.exit.clone(),
+            exit_time: sa.exit_time.clone(),
+            prob: sa.prob.clone(),
+        };
+        boundary.exit[1] = 6;
+        assert!(a.select_labels(&p, &boundary, 0, 6, true).0.is_empty());
+    }
+
+    #[test]
+    fn overnight_loss_stops_realization_day_and_resets_next_day() {
+        let e = test_engine(
+            wave_bars(600),
+            vec![
+                test_touch(287, 1, 100.0, 1.0),
+                test_touch(289, 1, 101.0, 1.0),
+                test_touch(578, 1, 102.0, 1.0),
+            ],
+        );
+        let p = Params {
+            day_stop_r: 0.5,
+            ..plain()
+        };
+        let sim = Sim {
+            r: vec![-1.0, 1.0, 1.0],
+            exit: vec![288, 290, 579],
+            exit_time: vec![86_401, 87_300, 174_000],
+            prob: vec![f32::NAN; 3],
+        };
+        assert_eq!(e.select(&p, &sim, 0, 600).0, vec![0, 2]);
+        assert_eq!(e.select_labels(&p, &sim, 0, 600, true).0, vec![0, 2]);
+    }
+
+    fn money_trade(start: i64, end: i64, dir: i8, r: f64) -> Trade {
+        Trade {
+            entry_time: start,
+            exit_time: end,
+            first_exit_time: end,
+            dir,
+            entry: 100.0,
+            sl: 100.0 - dir as f64,
+            r,
+            ..Trade::empty()
+        }
+    }
+
+    #[test]
+    fn cache_keys_do_not_round_distinct_simulation_parameters() {
+        let a = Params::default();
+        for id in ["sl_atr", "tp_r", "spread", "be_r", "part_r", "abs_vol"] {
+            let mut b = a.clone();
+            let value = b.get(id).unwrap();
+            b.set(id, value + 0.000001);
+            assert_ne!(Engine::key(&a), Engine::key(&b), "{id}");
+        }
+    }
+
+    #[test]
+    fn first_flip_loss_is_realized_before_profitable_flip_exit() {
+        let mut t = money_trade(0, 100000, 1, 1.0);
+        t.first_exit_time = 80000;
+        t.flip_entry = 100.0;
+        t.flip_r = 2.0;
+        let events = realized_legs(&t);
+        assert_eq!(events, vec![(80000, -1.0), (100000, 2.0)]);
+        let before_flip_close: f64 = events.iter().filter(|(time, _)| *time <= 85000).map(|(_, r)| r).sum();
+        assert!(before_flip_close <= -0.5);
+        assert_ne!(events[0].0.div_euclid(86400), events[1].0.div_euclid(86400));
+    }
+
+    #[test]
+    fn money_same_second_outcomes_are_not_silently_dropped() {
+        for dir in [1, -1] {
+            let win = money(&[money_trade(5, 5, dir, 1.0)], 10.0, 100.0);
+            let loss = money(&[money_trade(5, 5, dir, -1.0)], 10.0, 100.0);
+            assert!((win.return_pct - 10.0).abs() < 1e-9);
+            assert!((loss.return_pct + 10.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn overlapping_money_risk_is_fixed_at_entry_for_both_directions() {
+        for dir in [1, -1] {
+            let ts = vec![money_trade(0, 3, dir, 1.0), money_trade(1, 2, dir, 1.0)];
+            let m = money(&ts, 10.0, 100.0);
+            assert!((m.return_pct - 20.0).abs() < 1e-9); // not 21% exit compounding
+            let serial = money(&[money_trade(0, 1, dir, 1.0), money_trade(1, 2, dir, 1.0)], 10.0, 100.0);
+            assert!((serial.return_pct - 21.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn money_flip_resizes_after_first_loss_and_caps_its_own_stop() {
+        let mut t = money_trade(0, 3, 1, 0.0);
+        t.first_exit_time = 1;
+        t.flip_time = 2;
+        t.flip_entry = 100.0;
+        t.flip_sl = 100.1; // flip needs 100x at 10% risk, unlike initial 10x
+        t.flip_r = 1.0;
+        let m = money(&[t], 10.0, 10.0);
+        // Initial -10%, then flip +1% of the remaining 0.9 = 0.009.
+        assert!((m.return_pct + 9.1).abs() < 1e-9);
+        assert_eq!(m.capped, 0.5); // one of two legs capped
+        assert!((m.leverage_max - 100.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn money_first_exit_settles_before_delayed_flip_and_other_entry() {
+        let mut t = money_trade(0, 4, 1, 0.0);
+        t.first_exit_time = 1;
+        t.flip_time = 3;
+        t.flip_entry = 100.0;
+        t.flip_sl = 101.0;
+        t.flip_r = 1.0;
+        let m = money(&[t, money_trade(2, 5, -1, 1.0)], 10.0, 100.0);
+        // Both entries after the initial loss size on 0.9, not the later exit equity.
+        assert!((m.return_pct - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bar_and_minute_fill_gaps_do_not_receive_stale_stop_price() {
+        for dir in [1, -1] {
+            let open = if dir > 0 { 98.0 } else { 102.0 };
+            let bars = vec![
+                Bar::ohlcv(0, open, open, open, open, 1.0),
+                Bar::ohlcv(300, open, open, open, open, 1.0),
+            ];
+            let t = test_touch(0, dir, 100.0, 1.0);
+            let p = Params {
+                maker_bps: 0.0,
+                taker_bps: 0.0,
+                slippage: 0.1,
+                fill_through: 0.0,
+                ..plain()
+            };
+            let mins = [Minute {
+                time: 0,
+                open,
+                high: open,
+                low: open,
+                close: open,
+            }];
+            for ms in [&[][..], &mins[..]] {
+                let (tr, _) = simulate_in(&bars, ms, &t, &p).unwrap();
+                assert!((tr.exit - (open - dir as f64 * 0.1)).abs() < 1e-9);
+                assert!(tr.r < -4.0);
+            }
+        }
+    }
+
     #[test]
     fn month_ids_and_weekdays() {
         assert_eq!(month_id(0), "1970-01");
         assert_eq!(month_id(1_767_225_600), "2026-01");
         assert_eq!(calendar_days(0, 4 * 86_400), 4.0);
         assert_eq!(calendar_days(100, 200), 1.0);
+    }
+    #[test]
+    fn cached_limit_probabilities_ignore_close_features_and_construction_mode() {
+        let mut bars: Vec<Bar> = (0..4800)
+            .map(|i| {
+                let time = (i / 800) as i64 * 31 * 86_400 + (i % 800) as i64 * 300;
+                Bar::ohlcv(time, 100.0, 100.1, 99.9, 100.0, 1.0)
+            })
+            .collect();
+        for i in (1..bars.len() - 25).step_by(4) {
+            let time = bars[i + 1].time;
+            bars[i + 1] = if (i / 4) % 2 == 0 {
+                Bar::ohlcv(time, 100.0, 102.0, 99.9, 101.5, 1.0)
+            } else {
+                Bar::ohlcv(time, 100.0, 100.1, 98.0, 99.0, 1.0)
+            };
+        }
+        let touches: Vec<Touch> = (1..bars.len() - 25)
+            .step_by(4)
+            .map(|i| {
+                let mut t = test_touch(i, 1, 100.0, 1.0);
+                t.time = bars[i].time;
+                t.pre.fill(0.0);
+                t.f.fill(if (i / 4) % 2 == 0 { 1.0 } else { -1.0 });
+                t
+            })
+            .collect();
+        let bars = Arc::new(bars);
+        let make = |ts: Vec<Touch>, close| {
+            Engine::with_touches(
+                bars.clone(),
+                Arc::new(Vec::new()),
+                ts,
+                Vec::new(),
+                &ScanConfig::default(),
+                close,
+            )
+        };
+        let p = Params {
+            entry: "limit".into(),
+            use_model: true,
+            ..plain()
+        };
+        let correct = make(touches.clone(), false).sim(&p);
+        assert!(
+            correct.prob.iter().any(|x| x.is_finite()),
+            "fixture must exercise calibration"
+        );
+        let mut altered = touches.clone();
+        for (i, t) in altered.iter_mut().enumerate() {
+            t.f.fill((i % 7) as f64 * 1000.0);
+        }
+        for ts in [touches, altered] {
+            let e = make(ts, true);
+            let first = e.sim(&p);
+            let cached = e.sim(&p);
+            assert!(Arc::ptr_eq(&first, &cached));
+            for (got, want) in first.prob.iter().zip(&correct.prob) {
+                assert_eq!(got.to_bits(), want.to_bits());
+            }
+            for (got, want) in first.r.iter().zip(&correct.r) {
+                assert_eq!(got.to_bits(), want.to_bits());
+            }
+        }
     }
 }

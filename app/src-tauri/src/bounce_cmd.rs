@@ -212,6 +212,12 @@ async fn seconds(app: &AppHandle, state: &AppState) -> Result<Arc<Vec<Sec>>, Str
 
 /// The engine for these settings' level scan and entry mode, built once and reused.
 async fn engine(app: &AppHandle, state: &AppState, p: &Params) -> Result<(Arc<Engine>, String), String> {
+    if [p.maker_bps, p.taker_bps, p.spread, p.slippage]
+        .iter()
+        .any(|v| !v.is_finite() || *v < 0.0)
+    {
+        return Err("execution costs must be finite and nonnegative".into());
+    }
     let (bars, mins, source) = history(app, state).await?;
     let secs = if p.sec_engine {
         seconds(app, state).await?
@@ -323,6 +329,26 @@ struct GaProgress {
     best: f64,
 }
 
+fn validate_search_spec(spec: &GaSpec) -> Result<(), String> {
+    if !(8..=256).contains(&spec.population) || !(1..=256).contains(&spec.generations) {
+        return Err("search population must be 8..256 and generations 1..256".into());
+    }
+    if !(2..=365).contains(&spec.train_days) || !(1..=90).contains(&spec.test_days) {
+        return Err("train window must be 2..365 days and test window 1..90 days".into());
+    }
+    if spec.min_trades == 0
+        || !spec.target_win_rate.is_finite()
+        || !(0.0..=1.0).contains(&spec.target_win_rate)
+        || !spec.target_trades_per_day.is_finite()
+        || spec.target_trades_per_day < 0.0
+        || !spec.complexity.is_finite()
+        || spec.complexity < 0.0
+    {
+        return Err("invalid search targets, sample minimum or complexity".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn bounce_optimize(
     app: AppHandle,
@@ -330,6 +356,7 @@ pub async fn bounce_optimize(
     params: Params,
     spec: GaSpec,
 ) -> Result<OptimizeResult, String> {
+    validate_search_spec(&spec)?;
     if state.bounce.optimizing.swap(true, Ordering::SeqCst) {
         return Err("an optimisation is already running".into());
     }
@@ -428,4 +455,43 @@ pub async fn bounce_live(app: AppHandle, state: State<'_, AppState>, params: Par
     .await
     .map_err(|e| e.to_string())?;
     Ok(LiveResult { live, fresh, note })
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn default_search_is_valid_but_zero_day_tests_are_rejected() {
+        assert!(validate_search_spec(&GaSpec::default()).is_ok());
+        assert!(validate_search_spec(&GaSpec {
+            test_days: 0,
+            ..GaSpec::default()
+        })
+        .is_err());
+        assert!(validate_search_spec(&GaSpec {
+            train_days: -1,
+            ..GaSpec::default()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn excessive_budgets_and_nonfinite_targets_are_rejected() {
+        assert!(validate_search_spec(&GaSpec {
+            population: usize::MAX,
+            ..GaSpec::default()
+        })
+        .is_err());
+        assert!(validate_search_spec(&GaSpec {
+            generations: 0,
+            ..GaSpec::default()
+        })
+        .is_err());
+        assert!(validate_search_spec(&GaSpec {
+            target_win_rate: f64::NAN,
+            ..GaSpec::default()
+        })
+        .is_err());
+    }
 }
