@@ -10,14 +10,15 @@ use std::{
 };
 
 use aegis_core::{
-    density::{Density, Observation, Tracker},
+    density::{Density, Observation, Thresholds, Tracker},
+    settings::DensitySettings,
     BrokerId,
 };
 use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use crate::AppState;
 
@@ -41,6 +42,7 @@ pub struct Snapshot {
     rows: Vec<Density>,
     revision: u64,
     docked: bool,
+    thresholds: Thresholds,
 }
 
 impl Default for Snapshot {
@@ -57,6 +59,7 @@ impl Default for Snapshot {
             rows: Vec::new(),
             revision: 0,
             docked: true,
+            thresholds: Thresholds::default(),
         }
     }
 }
@@ -73,6 +76,7 @@ pub struct DensityState {
     pub docked: AtomicBool,
     quitting: AtomicBool,
     recorder: Arc<std::sync::Mutex<Recorder>>,
+    changed: Notify,
 }
 
 impl DensityState {
@@ -82,6 +86,7 @@ impl DensityState {
             docked: AtomicBool::new(true),
             quitting: AtomicBool::new(false),
             recorder: Arc::new(std::sync::Mutex::new(Recorder::new(directory))),
+            changed: Notify::new(),
         }
     }
 
@@ -104,6 +109,7 @@ struct Recorder {
     part: u32,
     bytes: u64,
     file: Option<File>,
+    last_cleanup: u64,
 }
 
 impl Recorder {
@@ -114,6 +120,7 @@ impl Recorder {
             part: 0,
             bytes: 0,
             file: None,
+            last_cleanup: 0,
         }
     }
 
@@ -138,6 +145,67 @@ impl Recorder {
         }
         result
     }
+
+    fn cleanup(&mut self, settings: &DensitySettings, time: u64) -> io::Result<()> {
+        if settings.retention_days == 0 && settings.max_history_mb == 0 {
+            self.last_cleanup = time;
+            return Ok(());
+        }
+        let entries = match fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let active = format!("densities-{}-{:04}.jsonl", self.start, self.part);
+        let mut files = Vec::new();
+        let mut total = 0_u64;
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_prefix("densities-").and_then(|v| v.strip_suffix(".jsonl")) else {
+                continue;
+            };
+            let Some((start, part)) = stem.split_once('-') else {
+                continue;
+            };
+            let (Ok(start), Ok(part)) = (start.parse::<u64>(), part.parse::<u32>()) else {
+                continue;
+            };
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if !metadata.file_type().is_file() {
+                continue;
+            }
+            let size = metadata.len();
+            let modified = metadata
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let expired = settings.retention_days > 0
+                && time.saturating_sub(modified) > settings.retention_days as u64 * 86_400_000;
+            if name != active && expired {
+                fs::remove_file(entry.path())?;
+                continue;
+            }
+            total = total.saturating_add(size);
+            if name != active {
+                files.push((start, part, entry.path(), size));
+            }
+        }
+        files.sort_by_key(|file| (file.0, file.1));
+        if settings.max_history_mb > 0 {
+            let limit = settings.max_history_mb as u64 * 1024 * 1024;
+            for (_, _, path, size) in files {
+                if total <= limit {
+                    break;
+                }
+                fs::remove_file(path)?;
+                total = total.saturating_sub(size);
+            }
+        }
+        self.last_cleanup = time;
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -149,7 +217,13 @@ struct Record<'a> {
     events: &'a [Observation],
 }
 
-async fn record(state: &DensityState, snapshot: &mut Snapshot, timestamp: Option<u64>, events: &[Observation]) {
+async fn record(
+    state: &DensityState,
+    snapshot: &mut Snapshot,
+    timestamp: Option<u64>,
+    events: &[Observation],
+    settings: &DensitySettings,
+) {
     snapshot.recording = true;
     snapshot.recording_error = None;
     let result = serde_json::to_vec(&Record {
@@ -163,10 +237,20 @@ async fn record(state: &DensityState, snapshot: &mut Snapshot, timestamp: Option
         Ok(mut line) => {
             line.push(b'\n');
             let recorder = state.recorder.clone();
-            tokio::task::spawn_blocking(move || recorder.lock().unwrap_or_else(|e| e.into_inner()).append(&line))
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()))
+            let settings = settings.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut recorder = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                let previous_part = recorder.part;
+                recorder.append(&line)?;
+                let time = now();
+                if time.saturating_sub(recorder.last_cleanup) >= 60_000 || previous_part != recorder.part {
+                    recorder.cleanup(&settings, time)?;
+                }
+                Ok::<_, io::Error>(())
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()))
         }
         Err(e) => Err(e.to_string()),
     };
@@ -174,6 +258,40 @@ async fn record(state: &DensityState, snapshot: &mut Snapshot, timestamp: Option
         snapshot.recording = false;
         snapshot.recording_error = Some(error);
     }
+}
+
+#[tauri::command]
+pub async fn density_settings_get(state: State<'_, AppState>) -> Result<DensitySettings, String> {
+    Ok(state.settings.lock().await.public().density)
+}
+
+#[tauri::command]
+pub async fn density_settings_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: DensitySettings,
+) -> Result<DensitySettings, String> {
+    let settings = {
+        let mut store = state.settings.lock().await;
+        let previous = store.public().density;
+        store.set_density(settings);
+        if let Err(error) = store.save() {
+            store.set_density(previous);
+            return Err(error.to_string());
+        }
+        store.public().density
+    };
+    state.density.docked.store(settings.docked, Ordering::SeqCst);
+    state
+        .density
+        .recorder
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .last_cleanup = 0;
+    state.density.changed.notify_one();
+    dock(&app);
+    let _ = app.emit("density_settings", &settings);
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -213,7 +331,9 @@ pub async fn run(app: AppHandle) {
     let mut previous_status = String::new();
     loop {
         let state = app.state::<AppState>();
-        let saved = state.settings.lock().await.public().chart_broker;
+        let public = state.settings.lock().await.public();
+        let saved = public.chart_broker;
+        let settings = public.density;
         let preferred = state.density.monitor.lock().await.preferred;
         let selected = {
             let sessions = state.sessions.lock().await;
@@ -267,7 +387,8 @@ pub async fn run(app: AppHandle) {
                 let bids: Vec<_> = book.bids.iter().map(|v| (v.price, v.quantity)).collect();
                 let asks: Vec<_> = book.asks.iter().map(|v| (v.price, v.quantity)).collect();
                 let time = now();
-                let (rows, observations) = monitor.tracker.sample(time, &bids, &asks);
+                let (rows, observations) = monitor.tracker.sample_with_settings(time, &bids, &asks, &settings);
+                monitor.snapshot.thresholds = monitor.tracker.thresholds;
                 monitor.snapshot.rows = rows;
                 monitor.snapshot.mid_price = Some((bids[0].0 + asks[0].0) / 2.0);
                 monitor.snapshot.symbol = Some(book.symbol);
@@ -279,6 +400,7 @@ pub async fn run(app: AppHandle) {
             }
             other => {
                 monitor.tracker.reset();
+                monitor.snapshot.thresholds = Thresholds::default();
                 monitor.snapshot.rows.clear();
                 monitor.snapshot.mid_price = None;
                 monitor.snapshot.updated_at = Some(now());
@@ -294,13 +416,26 @@ pub async fn run(app: AppHandle) {
             "{:?}:{}:{:?}",
             monitor.snapshot.broker, monitor.snapshot.status, monitor.snapshot.error
         );
-        if monitor.snapshot.status == "live" || status != previous_status || !monitor.snapshot.recording {
-            record(&state.density, &mut monitor.snapshot, book_timestamp, &events).await;
+        if !settings.recording {
+            monitor.snapshot.recording = false;
+            monitor.snapshot.recording_error = None;
+        } else if monitor.snapshot.status == "live" || status != previous_status || !monitor.snapshot.recording {
+            record(
+                &state.density,
+                &mut monitor.snapshot,
+                book_timestamp,
+                &events,
+                &settings,
+            )
+            .await;
             previous_status = status;
         }
         let _ = app.emit("density_update", &monitor.snapshot);
         drop(monitor);
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs_f64(settings.poll_seconds)) => {},
+            _ = state.density.changed.notified() => {},
+        }
     }
 }
 
@@ -380,11 +515,16 @@ pub fn dock(app: &AppHandle) {
 }
 
 pub fn setup_window(app: &AppHandle) -> tauri::Result<()> {
+    let preferences = app.state::<AppState>().settings.blocking_lock().public().density;
+    app.state::<AppState>()
+        .density
+        .docked
+        .store(preferences.docked, Ordering::SeqCst);
     let popup = WebviewWindowBuilder::new(app, "densities", WebviewUrl::App("densities.html".into()))
         .title("AEGIS · Gold densities")
         .inner_size(520.0, 840.0)
         .min_inner_size(440.0, 480.0)
-        .visible(true)
+        .visible(preferences.auto_open)
         .build()?;
     if let Some(main) = app.get_webview_window("main") {
         if let (Ok(Some(screen)), Ok(size), Ok(position), Ok(popup_size)) = (
@@ -444,7 +584,9 @@ pub fn setup_window(app: &AppHandle) -> tauri::Result<()> {
         _ => {}
     });
     dock(app);
-    popup.show()?;
+    if preferences.auto_open {
+        popup.show()?;
+    }
     Ok(())
 }
 
@@ -467,9 +609,10 @@ pub fn density_hide(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn density_set_docked(app: AppHandle, state: State<'_, AppState>, docked: bool) -> Result<(), String> {
-    state.density.docked.store(docked, Ordering::SeqCst);
-    dock(&app);
+pub async fn density_set_docked(app: AppHandle, state: State<'_, AppState>, docked: bool) -> Result<(), String> {
+    let mut settings = state.settings.lock().await.public().density;
+    settings.docked = docked;
+    density_settings_save(app, state, settings).await?;
     Ok(())
 }
 
@@ -492,13 +635,54 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn cleanup_deletes_only_inactive_owned_logs_and_preserves_active_file() {
+        let directory = std::env::temp_dir().join(format!("aegis-density-cleanup-{}-{}", std::process::id(), now()));
+        let mut recorder = Recorder::new(directory.clone());
+        recorder.append(b"active\n").unwrap();
+        let active = directory.join(format!("densities-{}-0000.jsonl", recorder.start));
+        let owned = directory.join("densities-1-0000.jsonl");
+        let unrelated = directory.join("densities-not-owned-0000.jsonl");
+        let malformed = directory.join("densities-2-not-a-part.jsonl");
+        fs::write(&owned, vec![0_u8; 17 * 1024 * 1024]).unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+        fs::write(&malformed, b"keep").unwrap();
+
+        recorder.cleanup(&DensitySettings::default(), now()).unwrap();
+        assert!(owned.exists());
+
+        let settings = DensitySettings {
+            max_history_mb: 16,
+            ..DensitySettings::default()
+        };
+        recorder.cleanup(&settings, now()).unwrap();
+
+        assert!(!owned.exists());
+        assert!(active.exists());
+        assert!(unrelated.exists());
+        assert!(malformed.exists());
+
+        let expired = directory.join("densities-3-0000.jsonl");
+        fs::write(&expired, b"expired").unwrap();
+        let retention = DensitySettings {
+            retention_days: 1,
+            ..DensitySettings::default()
+        };
+        recorder.cleanup(&retention, now() + 2 * 86_400_000).unwrap();
+        assert!(!expired.exists());
+        assert!(active.exists());
+        assert!(unrelated.exists());
+        drop(recorder);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[tokio::test]
     async fn recording_failure_is_visible() {
         let path = std::env::temp_dir().join(format!("aegis-density-blocked-{}-{}", std::process::id(), now()));
         fs::write(&path, b"not a directory").unwrap();
         let state = DensityState::new(path.clone());
         let mut snapshot = Snapshot::default();
-        record(&state, &mut snapshot, None, &[]).await;
+        record(&state, &mut snapshot, None, &[], &DensitySettings::default()).await;
         assert!(!snapshot.recording);
         assert!(snapshot.recording_error.is_some());
         fs::remove_file(path).unwrap();

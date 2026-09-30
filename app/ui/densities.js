@@ -16,6 +16,9 @@
       notional: "Notional", strength: "Strength", touches: "Touches", reactions: "Reactions", score: "Score", probabilityShort: "Probability",
       notCalibrated: "Not calibrated", hide: "Hide screener", noSource: "No broker", waitingStatus: "Waiting", sourceUnavailable: "Unavailable",
       since: "Observed {age}", reference: "from book mid", seen: "Last seen", unknownStatus: "Status: {status}",
+      automatic: "Auto threshold", manual: "Manual threshold", warming: "Gathering statistics", ready: "Statistics ready",
+      activity: "Book-size activity vs today", poll: "Polling every {seconds}s · last sample {age} ago",
+      peak: "Peak size", change: "Size change", colors: "Side colors; stronger / new / persistent levels highlighted",
     },
     ru: {
       title: "Плотности", waiting: "Ожидание источника", noBroker: "Нет подключённого брокера", live: "Поток активен", unavailable: "Недоступно",
@@ -28,6 +31,9 @@
       notional: "Номинал", strength: "Сила", touches: "Касания", reactions: "Реакции", score: "Оценка", probabilityShort: "Вероятность",
       notCalibrated: "Не калибрована", hide: "Скрыть скринер", noSource: "Нет брокера", waitingStatus: "Ожидание", sourceUnavailable: "Недоступно",
       since: "Стоит {age}", reference: "от mid стакана", seen: "Обновлён", unknownStatus: "Статус: {status}",
+      automatic: "Автопорог", manual: "Ручной порог", warming: "Накопление статистики", ready: "Статистика накоплена",
+      activity: "Размеры в стакане к сегодняшнему фону", poll: "Опрос каждые {seconds}с · снимок {age} назад",
+      peak: "Макс. объём", change: "Изменение объёма", colors: "Цвет стороны; выделены сильные, новые и устойчивые уровни",
     },
     kk: {
       title: "Тығыздықтар", waiting: "Дереккөз күтілуде", noBroker: "Брокер қосылмаған", live: "Ағын белсенді", unavailable: "Қолжетімсіз",
@@ -40,10 +46,14 @@
       notional: "Номинал", strength: "Күші", touches: "Тию саны", reactions: "Реакциялар", score: "Баға", probabilityShort: "Ықтималдық",
       notCalibrated: "Калибрленбеген", hide: "Скринерді жасыру", noSource: "Брокер жоқ", waitingStatus: "Күтілуде", sourceUnavailable: "Қолжетімсіз",
       since: "Басталуы: {age}", reference: "нарықтан", seen: "Жаңартылды", unknownStatus: "Күйі: {status}",
+      automatic: "Автоматты шек", manual: "Қолмен шек", warming: "Статистика жиналуда", ready: "Статистика дайын",
+      activity: "Стакан көлемі бүгінгі фонға қатысты", poll: "Сұрау әр {seconds}с · соңғы сурет {age} бұрын",
+      peak: "Ең үлкен көлем", change: "Көлем өзгерісі", colors: "Тарап түсі; күшті, жаңа және тұрақты деңгейлер ерекшеленген",
     },
   };
 
-  const S = { lang: "en", sort: "strength", snapshot: null, eventCount: 0, revision: -1, docked: true, error: null };
+  const S = { lang: "en", sort: "strength", snapshot: null, eventCount: 0, revision: -1, docked: true, error: null,
+    settings: window.DensitySettingsUI.merge(), settingsCount: 0 };
   const t = (key, vars = {}) => (words[S.lang] || words.en)[key].replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
   const finite = (n) => n !== null && n !== undefined && n !== "" && Number.isFinite(Number(n));
   const number = (n, digits = 2) => finite(n) ? Number(n).toLocaleString(undefined, { maximumFractionDigits: digits }) : "—";
@@ -61,7 +71,7 @@
     if (!payload) return "waiting";
     if (payload.error) return "error";
     if (payload.status === "live" && payload.broker) {
-      return finite(payload.updated_at) && Date.now() - Number(payload.updated_at) <= 5000 ? "live" : "waiting";
+      return finite(payload.updated_at) && Date.now() - Number(payload.updated_at) <= Math.max(5000, S.settings.poll_seconds * 3000) ? "live" : "waiting";
     }
     if (["unavailable", "error"].includes(payload.status)) return payload.status;
     if (!payload.broker || payload.status === "no_broker") return "no_broker";
@@ -91,6 +101,18 @@
       document.documentElement.dataset.theme = prefs.theme;
     }
     if (prefs?.lang) setLanguage(prefs.lang);
+  }
+
+  function applySettings(settings) {
+    S.settings = window.DensitySettingsUI.merge(settings);
+    S.sort = S.settings.sort;
+    S.docked = S.settings.docked;
+    $("docked").checked = S.docked;
+    for (const [field, css] of [["bid_color", "--density-bid"], ["ask_color", "--density-ask"]]) {
+      const color = S.settings[field];
+      if (/^#[0-9a-f]{6}$/i.test(color)) document.documentElement.style.setProperty(css, color);
+    }
+    render();
   }
 
   function applySnapshot(snapshot) {
@@ -131,6 +153,15 @@
     $("sortDistance").title = hasReference ? t("distance") : t("distanceUnavailable");
     $("distanceNote").hidden = hasReference;
     $("distanceNote").textContent = t("distanceUnavailable");
+    const threshold = data?.thresholds;
+    $("thresholds").hidden = kind !== "live" || !threshold;
+    if (threshold) {
+      $("thresholds").textContent = `${t(S.settings.auto_threshold ? "automatic" : "manual")} · ${t("bid")}: ${number(threshold.bid)} · ${t("ask")}: ${number(threshold.ask)}`;
+      if (S.settings.auto_threshold) {
+        $("thresholds").textContent += `\n${t(threshold.warming_up ? "warming" : "ready")} · ${t("activity")}: ${number(threshold.activity_ratio)}×`;
+      }
+    }
+    $("sampling").textContent = t("poll", { seconds: number(S.settings.poll_seconds, 1), age: finite(data?.updated_at) ? age(data.updated_at) : "—" });
   }
 
   function emptyState() {
@@ -163,6 +194,13 @@
   function renderCard(row, referencePrice) {
     const card = document.createElement("article");
     card.className = "density-card";
+    card.dataset.side = row.side === "ask" ? "ask" : "bid";
+    const observedSeconds = (Date.now() - Number(row.first_seen)) / 1000;
+    card.dataset.highlight = S.settings.highlight ? "1" : "0";
+    card.dataset.new = observedSeconds < 30 ? "1" : "0";
+    card.dataset.persistent = observedSeconds >= 300 ? "1" : "0";
+    card.style.setProperty("--density-tint", `${Math.min(18, Math.max(3, Number(row.strength || 0)))}%`);
+    card.title = t("colors");
     const head = document.createElement("div");
     head.className = "density-card-head";
     const side = document.createElement("span");
@@ -192,6 +230,8 @@
       metric(t("strength"), number(row.strength, 3)),
       metric(t("touches"), number(row.touches, 0)),
       metric(t("reactions"), number(row.reactions, 0)),
+      metric(t("peak"), number(row.max_quantity)),
+      metric(t("change"), finite(row.quantity_change_pct) ? `${number(row.quantity_change_pct, 1)}%` : "—"),
       metric(t("probabilityShort"), t("notCalibrated")),
     );
     const footer = document.createElement("div");
@@ -207,7 +247,10 @@
 
   function renderRows() {
     const data = S.snapshot;
-    const rows = Array.isArray(data?.rows) ? data.rows.slice() : [];
+    const rows = Array.isArray(data?.rows) ? data.rows.filter((row) =>
+      (Date.now() - Number(row.first_seen)) / 1000 >= S.settings.min_age_seconds
+      && Number(row.touches || 0) >= S.settings.min_touches
+      && Number(row.strength || 0) >= S.settings.min_strength) : [];
     const referencePrice = Number(data?.mid_price);
     if (S.sort === "distance" && finite(referencePrice)) {
       rows.sort((a, b) => Math.abs(Number(a.price) - referencePrice) - Math.abs(Number(b.price) - referencePrice));
@@ -256,8 +299,6 @@
       return;
     }
     try {
-      const bootstrap = await invoke("bootstrap");
-      setPreferences({ theme: bootstrap.settings?.theme, lang: bootstrap.settings?.lang || "en" });
       await Promise.all([
         tauri.event.listen("density_update", ({ payload }) => {
           S.eventCount += 1;
@@ -265,7 +306,16 @@
           applySnapshot(payload);
         }),
         tauri.event.listen("density_preferences", ({ payload }) => setPreferences(payload)),
+        tauri.event.listen("density_settings", ({ payload }) => {
+          S.settingsCount += 1;
+          applySettings(payload);
+        }),
       ]);
+      const beforeSettings = S.settingsCount;
+      const bootstrap = await invoke("bootstrap");
+      setPreferences({ theme: bootstrap.settings?.theme, lang: bootstrap.settings?.lang || "en" });
+      const savedSettings = await invoke("density_settings_get");
+      if (beforeSettings === S.settingsCount) applySettings(savedSettings);
       const beforeSnapshot = S.eventCount;
       const snapshot = await invoke("density_snapshot");
       if (beforeSnapshot === S.eventCount) {

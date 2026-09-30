@@ -524,6 +524,8 @@ fn main() {
             density_cmd::density_open,
             density_cmd::density_hide,
             density_cmd::density_set_docked,
+            density_cmd::density_settings_get,
+            density_cmd::density_settings_save,
             bounce_cmd::bounce_info,
             bounce_cmd::bounce_save,
             bounce_cmd::bounce_backtest,

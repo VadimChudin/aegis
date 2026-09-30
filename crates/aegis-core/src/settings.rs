@@ -28,6 +28,106 @@ const PREFIX: &str = "enc:v1:";
 pub const THEMES: [&str; 3] = ["glass-dark", "glass-light", "glass-blue"];
 pub const LANGS: [&str; 3] = ["en", "ru", "kk"];
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DensitySettings {
+    pub poll_seconds: f64,
+    pub auto_threshold: bool,
+    pub strength_multiplier: f64,
+    pub window_minutes: u32,
+    pub percentile: f64,
+    pub min_quantity: f64,
+    pub max_distance: f64,
+    pub min_age_seconds: u32,
+    pub min_touches: u32,
+    pub min_strength: f64,
+    pub bid_color: String,
+    pub ask_color: String,
+    pub highlight: bool,
+    pub sort: String,
+    pub recording: bool,
+    pub retention_days: u32,
+    pub max_history_mb: u32,
+    pub auto_open: bool,
+    pub docked: bool,
+}
+
+impl Default for DensitySettings {
+    fn default() -> Self {
+        Self {
+            poll_seconds: 1.0,
+            auto_threshold: true,
+            strength_multiplier: 3.0,
+            window_minutes: 60,
+            percentile: 95.0,
+            min_quantity: 0.0,
+            max_distance: 10.0,
+            min_age_seconds: 0,
+            min_touches: 0,
+            min_strength: 0.0,
+            bid_color: "#30d158".into(),
+            ask_color: "#ff453a".into(),
+            highlight: true,
+            sort: "strength".into(),
+            recording: true,
+            retention_days: 0,
+            max_history_mb: 0,
+            auto_open: true,
+            docked: true,
+        }
+    }
+}
+
+impl DensitySettings {
+    pub fn calculation_changed(&self, other: &Self) -> bool {
+        self.auto_threshold != other.auto_threshold
+            || self.strength_multiplier != other.strength_multiplier
+            || self.window_minutes != other.window_minutes
+            || self.percentile != other.percentile
+            || self.min_quantity != other.min_quantity
+            || self.max_distance != other.max_distance
+    }
+
+    /// Clamp numeric options and replace malformed display preferences with safe defaults.
+    pub fn validate(&mut self) {
+        fn bounded(value: f64, default: f64, min: f64, max: f64) -> f64 {
+            if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                default
+            }
+        }
+        fn color(value: &mut String, default: &str) {
+            let valid = value.len() == 7 && value.starts_with('#') && value[1..].bytes().all(|b| b.is_ascii_hexdigit());
+            if !valid {
+                *value = default.into();
+            }
+        }
+
+        let defaults = Self::default();
+        self.poll_seconds = bounded(self.poll_seconds, defaults.poll_seconds, 0.5, 10.0);
+        self.strength_multiplier = bounded(self.strength_multiplier, defaults.strength_multiplier, 1.5, 20.0);
+        self.window_minutes = self.window_minutes.clamp(5, 240);
+        self.percentile = bounded(self.percentile, defaults.percentile, 80.0, 99.9);
+        self.min_quantity = bounded(self.min_quantity, defaults.min_quantity, 0.0, f64::MAX);
+        self.max_distance = bounded(self.max_distance, defaults.max_distance, 0.1, 1_000.0);
+        self.min_age_seconds = self.min_age_seconds.min(86_400);
+        self.min_touches = self.min_touches.min(1_000);
+        self.min_strength = bounded(self.min_strength, defaults.min_strength, 0.0, 100.0);
+        color(&mut self.bid_color, &defaults.bid_color);
+        color(&mut self.ask_color, &defaults.ask_color);
+        if self.sort != "strength" && self.sort != "distance" {
+            self.sort = defaults.sort;
+        }
+        if self.retention_days != 0 {
+            self.retention_days = self.retention_days.clamp(1, 365);
+        }
+        if self.max_history_mb != 0 {
+            self.max_history_mb = self.max_history_mb.clamp(16, 10_240);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BrokerSettings {
     #[serde(default)]
@@ -47,6 +147,8 @@ pub struct Settings {
     pub chart_broker: Option<BrokerId>,
     #[serde(default = "default_timeframe")]
     pub timeframe: Timeframe,
+    #[serde(default)]
+    pub density: DensitySettings,
     /// Interface language: "en", "ru" or "kk"; empty = follow the system.
     #[serde(default)]
     pub lang: String,
@@ -71,6 +173,7 @@ impl Default for Settings {
             theme: default_theme(),
             chart_broker: None,
             timeframe: default_timeframe(),
+            density: DensitySettings::default(),
             lang: String::new(),
             brokers: BTreeMap::new(),
             strategies: BTreeMap::new(),
@@ -97,6 +200,7 @@ pub struct PublicSettings {
     pub lang: String,
     pub chart_broker: Option<BrokerId>,
     pub timeframe: Timeframe,
+    pub density: DensitySettings,
     pub brokers: BTreeMap<BrokerId, PublicBroker>,
 }
 
@@ -125,7 +229,7 @@ impl SettingsStore {
 
     pub fn open_with_key(path: impl Into<PathBuf>, key: [u8; 32]) -> Self {
         let path = path.into();
-        let data = match fs::read_to_string(&path) {
+        let mut data = match fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
                 log::warn!("settings: {e}; starting from defaults");
                 let _ = fs::rename(&path, path.with_extension("json.bad"));
@@ -133,6 +237,7 @@ impl SettingsStore {
             }),
             Err(_) => Settings::default(),
         };
+        data.density.validate();
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         SettingsStore { path, cipher, data }
     }
@@ -149,6 +254,15 @@ impl SettingsStore {
         if THEMES.contains(&theme) {
             self.data.theme = theme.into();
         }
+    }
+
+    pub fn density(&self) -> &DensitySettings {
+        &self.data.density
+    }
+
+    pub fn set_density(&mut self, mut density: DensitySettings) {
+        density.validate();
+        self.data.density = density;
     }
 
     pub fn set_lang(&mut self, lang: &str) {
@@ -263,6 +377,7 @@ impl SettingsStore {
             lang: self.data.lang.clone(),
             chart_broker: self.data.chart_broker,
             timeframe: self.data.timeframe,
+            density: self.data.density.clone(),
             brokers,
         }
     }
@@ -348,6 +463,70 @@ mod tests {
         assert_eq!(again.credentials(BrokerId::Binance)["api_secret"], "SECRET-xyz");
         assert_eq!(again.settings().timeframe, Timeframe::H1);
         assert!(again.broker(BrokerId::Binance).unwrap().auto_connect);
+    }
+
+    #[test]
+    fn older_settings_without_density_use_defaults() {
+        let path = tmp("legacy-density");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"theme":"glass-dark","lang":"ru"}"#).unwrap();
+        let store = SettingsStore::open_with_key(&path, [9; 32]);
+        assert_eq!(store.density(), &DensitySettings::default());
+        assert_eq!(store.public().density, DensitySettings::default());
+    }
+
+    #[test]
+    fn density_settings_are_validated_persisted_and_public() {
+        let path = tmp("density-config");
+        let mut store = SettingsStore::open_with_key(&path, [10; 32]);
+        let options = DensitySettings {
+            poll_seconds: f64::NAN,
+            strength_multiplier: 100.0,
+            window_minutes: 0,
+            percentile: f64::INFINITY,
+            min_quantity: -1.0,
+            max_distance: 0.0,
+            min_age_seconds: u32::MAX,
+            min_touches: u32::MAX,
+            min_strength: 200.0,
+            bid_color: "red".into(),
+            sort: "other".into(),
+            retention_days: 400,
+            max_history_mb: 1,
+            ..DensitySettings::default()
+        };
+        store.set_density(options);
+        let saved = store.density().clone();
+        assert_eq!(saved.poll_seconds, 1.0);
+        assert_eq!(saved.strength_multiplier, 20.0);
+        assert_eq!(saved.window_minutes, 5);
+        assert_eq!(saved.percentile, 95.0);
+        assert_eq!(saved.min_quantity, 0.0);
+        assert_eq!(saved.max_distance, 0.1);
+        assert_eq!(saved.min_age_seconds, 86_400);
+        assert_eq!(saved.min_touches, 1_000);
+        assert_eq!(saved.min_strength, 100.0);
+        assert_eq!(saved.bid_color, "#30d158");
+        assert_eq!(saved.sort, "strength");
+        assert_eq!(saved.retention_days, 365);
+        assert_eq!(saved.max_history_mb, 16);
+
+        store.save().unwrap();
+        let loaded = SettingsStore::open_with_key(&path, [10; 32]);
+        assert_eq!(loaded.density(), &saved);
+        assert_eq!(loaded.public().density, saved);
+    }
+
+    #[test]
+    fn new_density_settings_disable_journal_deletion_by_default() {
+        let defaults = DensitySettings::default();
+        assert_eq!(defaults.retention_days, 0);
+        assert_eq!(defaults.max_history_mb, 0);
+
+        let mut settings = defaults;
+        settings.validate();
+        assert_eq!(settings.retention_days, 0);
+        assert_eq!(settings.max_history_mb, 0);
     }
 
     #[test]
