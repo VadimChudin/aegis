@@ -49,6 +49,15 @@ cargo test --workspace                                  # Rust tests (starts the
 cargo run -p aegis-app                                  # open the window
 ```
 
+Browser UI regressions use synthetic desktop responses, without real credentials or broker connections:
+
+```bash
+cd app
+npm ci
+npx playwright install chromium
+npm run test:ui
+```
+
 Without access to the real APIs, run the mock and log in with key `test-key`, secret `test-secret`:
 
 ```bash
