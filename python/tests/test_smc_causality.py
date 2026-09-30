@@ -260,3 +260,14 @@ def test_incomplete_prior_bar_cannot_contaminate_atr():
     b = smc.resample(changed, 3600)
     assert 0 not in a.t.to_list()
     np.testing.assert_allclose(a.atr.to_numpy(), b.atr.to_numpy(), equal_nan=True)
+
+
+@pytest.mark.parametrize('bad', [np.nan, np.inf, -np.inf, -0.01])
+def test_benchmark_nonfinite_or_negative_costs_rejected(bad):
+    mod = benchmark_module()
+    with pytest.raises(ValueError):
+        mod.validate_costs(0.0002, bad, 0.05, 0.02, 0.01)
+
+
+def test_benchmark_zero_costs_are_valid_explicit_diagnostic():
+    benchmark_module().validate_costs(0.0, 0.0, 0.0, 0.0, 0.01)

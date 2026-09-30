@@ -92,6 +92,11 @@ def select(rows, min_train, min_validation):
     return validated[0]["candidate"], "Top three by training total net R; highest validation total net R"
 
 
+def validate_costs(*values):
+    if not all(np.isfinite(v) and v >= 0 for v in values):
+        raise ValueError("Execution costs and tick-through must be finite and nonnegative")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--csv", type=Path, required=True)
@@ -111,8 +116,10 @@ def main():
     cuts = list(map(timestamp, (args.train_start, args.train_end, args.validation_end, args.test_end)))
     if not all(a < b for a, b in zip(cuts, cuts[1:])):
         ap.error("Date boundaries must increase; endpoints are exclusive UTC")
-    if min(args.maker, args.taker, args.slippage, args.spread, args.tick_through) < 0:
-        ap.error("Execution costs and tick-through must be nonnegative")
+    try:
+        validate_costs(args.maker, args.taker, args.slippage, args.spread, args.tick_through)
+    except ValueError as exc:
+        ap.error(str(exc))
     if args.min_train < 1 or args.min_validation < 1:
         ap.error("Minimum counts must be positive")
     cfgs = candidates()
