@@ -22,6 +22,11 @@
     busy: {},
     openCard: null,
     panel: null,
+    settingsTab: "appearance",
+    densitySettings: null,
+    densityLoaded: false,
+    densityLoading: false,
+    densityLoadError: "",
     chart: { broker: null, tf: "15m", generation: 0, lastTime: 0, wanted: null, request: 0, error: null },
   };
 
@@ -58,6 +63,15 @@
     const down = css("--candle-down");
     candles.applyOptions({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down });
     volumes.setData(S.bars.map(volBar));
+  }
+
+  function densityButtonLabel() {
+    const lang = window.I18N.lang;
+    return lang === "ru" ? "Плотности" : lang === "kk" ? "Тығыздықтар" : "Densities";
+  }
+
+  function selectDensitySource(broker) {
+    invoke("density_select", { broker }).catch((err) => log(`Density source: ${err}`, "warn"));
   }
 
   // ---- chart ------------------------------------------------------------------
@@ -132,6 +146,7 @@
     if (S.btView) window.AEGIS.bounce?.leaveBacktestView(true);
     const request = ++S.chart.request;
     S.chart.broker = broker;
+    selectDensitySource(broker);
     const tf = S.chart.tf;
     S.chart.error = null;
     S.chart.generation = -1;
@@ -164,6 +179,7 @@
   async function stopChart() {
     ++S.chart.request;
     S.chart.broker = null;
+    selectDensitySource(null);
     S.chart.error = null;
     S.chart.generation = -1;
     await invoke("stop_chart");
@@ -440,7 +456,7 @@
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
-      renderThemePanel();
+      renderSettingsPanel("appearance");
     }
   }
 
@@ -578,28 +594,80 @@
     }
   }
 
+  function settingsTabLabel(key) {
+    const labels = {
+      appearance: { en: "Appearance", ru: "Внешний вид", kk: "Көрініс" },
+      screener: { en: "Screener", ru: "Скринер", kk: "Скринер" },
+    };
+    return labels[key][window.I18N.lang] || labels[key].en;
+  }
+
+  function renderSettingsPanel(tab = S.settingsTab) {
+    S.settingsTab = tab;
+    $("panelTitle").textContent = t("Settings");
+    $("panel").classList.remove("wide");
+    $("panelBody").innerHTML = `<nav class="density-settings-tabs" aria-label="${esc(t("Settings"))}">
+      <button type="button" class="ghost sm density-settings-tab${tab === "appearance" ? " on" : ""}" data-settings-tab="appearance">${esc(settingsTabLabel("appearance"))}</button>
+      <button type="button" class="ghost sm density-settings-tab${tab === "screener" ? " on" : ""}" data-settings-tab="screener">${esc(settingsTabLabel("screener"))}</button>
+    </nav><div class="settings-view" id="settingsView"></div>`;
+    $("panelBody").querySelectorAll("[data-settings-tab]").forEach((button) => {
+      button.onclick = () => renderSettingsPanel(button.dataset.settingsTab);
+    });
+    if (tab === "screener") renderScreenerSettings();
+    else renderThemePanel();
+  }
+
+  function renderScreenerSettings() {
+    const view = $("settingsView");
+    window.DensitySettingsUI.render(view, {
+      settings: S.densitySettings,
+      lang: window.I18N.lang,
+      preview: !tauri,
+      loading: !!tauri && S.densityLoading && !S.densityLoaded,
+      loadError: S.densityLoadError,
+      invoke: tauri ? invoke : null,
+      onSaved: (settings) => { S.densitySettings = settings; },
+      onRetry: () => {
+        S.densityLoadError = "";
+        renderScreenerSettings();
+      },
+    });
+    if (!tauri || S.densityLoaded || S.densityLoading || S.densityLoadError) return;
+    S.densityLoading = true;
+    renderScreenerSettings();
+    invoke("density_settings_get").then((settings) => {
+      S.densitySettings = window.DensitySettingsUI.merge(settings);
+      S.densityLoaded = true;
+    }).catch((error) => {
+      S.densityLoadError = String(error);
+    }).finally(() => {
+      S.densityLoading = false;
+      if (S.panel === "theme" && S.settingsTab === "screener") renderSettingsPanel("screener");
+    });
+  }
+
   function renderThemePanel() {
-    const current = S.settings.theme;
+    const settings = S.settings || {};
+    const current = settings.theme || document.documentElement.dataset.theme || THEMES[0][0];
     const lang = window.I18N.lang;
-    $("panelBody").innerHTML = `<div class="field"><label>${esc(t("Language"))}</label></div><div class="lang-row" id="langRow">${window.I18N.LANGS.map(
+    $("settingsView").innerHTML = `<div class="field"><label>${esc(t("Language"))}</label></div><div class="lang-row" id="langRow">${window.I18N.LANGS.map(
       ([id, name]) => `<button type="button" class="ghost sm${id === lang ? " on" : ""}" data-lang="${id}">${esc(name)}</button>`,
     ).join("")}</div>
       <div class="field"><label>${esc(t("Theme"))}</label></div><div class="theme-grid" id="themeGrid">${THEMES.map(
       ([id, name]) => `<button type="button" class="theme-card${id === current ? " on" : ""}" data-theme="${id}">
         <span class="theme-swatch" data-swatch="${id}"><i></i><i></i><i></i></span><span class="theme-name">${esc(t(name))}</span></button>`,
-    ).join("")}</div><p class="hint">AEGIS v${esc(S.version)} · ${esc(t("settings are stored on this computer."))}</p>`;
-    $("themeGrid").querySelectorAll(".theme-card").forEach((b) => {
+    ).join("")}</div><p class="hint">AEGIS v${esc(S.version || "preview")} · ${esc(t("settings are stored on this computer."))}</p>`;
+    $("settingsView").querySelectorAll(".theme-card").forEach((b) => {
       b.onclick = async () => {
         S.settings.theme = b.dataset.theme;
         applyTheme(b.dataset.theme);
-        $("themeGrid").querySelectorAll(".theme-card").forEach((x) => x.classList.toggle("on", x === b));
-        await invoke("set_theme", { theme: b.dataset.theme });
+        $("settingsView").querySelectorAll(".theme-card").forEach((x) => x.classList.toggle("on", x === b));
+        if (tauri) await invoke("set_theme", { theme: b.dataset.theme });
       };
     });
-    $("langRow").querySelectorAll("[data-lang]").forEach((b) => {
+    $("settingsView").querySelectorAll("[data-lang]").forEach((b) => {
       b.onclick = async () => {
-        await setLang(b.dataset.lang, true);
-        renderThemePanel();
+        await setLang(b.dataset.lang, !!tauri);
       };
     });
   }
@@ -608,13 +676,16 @@
   async function setLang(lang, persist) {
     window.I18N.set(lang);
     S.settings.lang = window.I18N.lang;
-    if (persist) await invoke("set_lang", { lang: window.I18N.lang });
+    $("btnDensities").textContent = densityButtonLabel();
+    $("btnDensities").title = window.I18N.lang === "ru" ? "Скринер плотностей" : window.I18N.lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
+    if (persist && tauri) await invoke("set_lang", { lang: window.I18N.lang });
     renderStrategies(S.strategies || []);
-    renderChartChrome();
+    if (tauri) renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
     const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
+    if (S.panel === "theme") renderSettingsPanel(S.settingsTab);
   }
 
   // ---- live feed ----------------------------------------------------------------
@@ -638,6 +709,14 @@
       setLamp(payload.ok ? "ok" : "halt", payload.message);
       if (!payload.ok) log(`Feed: ${payload.message}`, "bad");
     });
+    tauri.event.listen("density_settings", ({ payload }) => {
+      S.densitySettings = window.DensitySettingsUI.merge(payload);
+      S.densityLoaded = true;
+      S.densityLoadError = "";
+      if (S.panel === "theme" && S.settingsTab === "screener" && !S.densityLoading && !window.DensitySettingsUI.saving) {
+        renderSettingsPanel("screener");
+      }
+    });
   }
 
   // Shared with strategy panels (bounce.js).
@@ -659,8 +738,54 @@
   // ---- boot ---------------------------------------------------------------------
 
   async function boot() {
+    $("btnDensities").onclick = async () => {
+      if (tauri) {
+        try {
+          await invoke("density_open");
+          return;
+        } catch (err) {
+          log(`Density window: ${err}`, "warn");
+        }
+      }
+      window.open("densities.html", "aegis-densities", "popup,width=460,height=820,resizable=yes");
+    };
     if (!tauri) {
-      setLamp("halt", "Open AEGIS through the desktop app");
+      const lang = window.I18N.detect();
+      window.I18N.set(lang);
+      S.settings = { theme: document.documentElement.dataset.theme, lang, density: window.DensitySettingsUI.defaults, brokers: {} };
+      S.densitySettings = window.DensitySettingsUI.defaults;
+      $("btnDensities").textContent = densityButtonLabel();
+      $("btnDensities").title = lang === "ru" ? "Скринер плотностей" : lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
+      $("browserNotice").hidden = false;
+      $("browserNotice").textContent = lang === "ru"
+        ? "Предпросмотр в браузере: подключите настольное приложение для данных брокеров."
+        : lang === "kk"
+          ? "Браузердегі алдын ала көру: брокер деректері үшін жұмыс үстелі қолданбасын ашыңыз."
+          : "Browser preview only · Open the desktop app to connect broker data.";
+      $("btnBrokers").disabled = true;
+      $("btnMenu").disabled = true;
+      $("emptyConnect").hidden = true;
+      $("emptyText").textContent = lang === "ru"
+        ? "Просмотр не подключён к брокеру и не получает рыночные данные."
+        : lang === "kk"
+          ? "Алдын ала көру брокерге қосылмаған және нарық деректерін алмайды."
+          : "This preview is not connected to a broker and receives no market data.";
+      $("statBrokers").textContent = "—";
+      setLamp("halt", $("browserNotice").textContent);
+      $("btnMenu").disabled = false;
+      $("btnMenu").onclick = () => openSheet($("sheet").hidden);
+      $("sheetClose").onclick = () => openSheet(false);
+      $("panelClose").onclick = closePanel;
+      $("backdrop").onclick = () => { openSheet(false); closePanel(); };
+      $("sheet").querySelector('[data-open="brokers"]').disabled = true;
+      $("sheet").querySelector('[data-open="theme"]').onclick = () => openPanel("theme");
+      document.querySelectorAll(".rail-item").forEach((button) => {
+        button.disabled = button.dataset.panel === "brokers";
+        button.onclick = () => button.dataset.panel === "theme" ? openPanel("theme") : closePanel();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { closePanel(); openSheet(false); }
+      });
       return;
     }
     window.addEventListener("error", (e) => log(`UI error: ${e.message}`, "bad"));
@@ -672,6 +797,7 @@
     S.infos = Object.fromEntries(b.brokers.map((x) => [x.id, x]));
     S.timeframes = b.timeframes;
     S.settings = b.settings;
+    S.densitySettings = b.settings.density;
     S.sessions = Object.fromEntries(b.sessions.map((s) => [s.broker, s]));
     S.chart.tf = b.settings.timeframe || "15m";
     S.chart.wanted = b.settings.chart_broker;
@@ -697,6 +823,7 @@
     };
     $("panelClose").onclick = closePanel;
     $("btnBrokers").onclick = () => openPanel("brokers");
+    $("btnDensities").textContent = densityButtonLabel();
     $("emptyConnect").onclick = () => (S.chart.error ? loadChart(S.chart.broker) : openPanel("brokers"));
     document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => openPanel(b.dataset.open)));
     document.querySelectorAll(".rail-item").forEach((b) => {

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AEGIS</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="density-settings.css" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true"></div>
@@ -22,6 +23,7 @@
         </div>
         <div class="chrome-center">
           <div class="broker-dots" id="brokerDots"></div>
+          <button class="density-open" id="btnDensities" type="button" title="Density screener">Densities</button>
         </div>
         <div class="chrome-right">
           <span class="lamp" id="feedLamp" data-on="0" title="Offline"></span>
@@ -35,6 +37,8 @@
           </button>
         </div>
       </header>
+
+      <div class="browser-notice" id="browserNotice" role="status" hidden></div>
 
       <main class="stage">
         <aside class="rail glass" id="rail">
@@ -88,7 +92,7 @@
     <section class="panel glass" id="panel" hidden>
       <header class="panel-h">
         <h2 id="panelTitle">Settings</h2>
-        <button class="orb sm" id="panelClose" type="button" aria-label="Close">✕</button>
+        <button class="orb sm close-icon" id="panelClose" type="button" aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
       </header>
       <div id="panelBody"></div>
     </section>
@@ -96,6 +100,7 @@
     <script src="vendor/lightweight-charts.standalone.production.js"></script>
     <script src="i18n.js"></script>
     <script src="i18n-dict.js"></script>
+    <script src="density-settings.js"></script>
     <script src="app.js"></script>
     <script src="bounce.js"></script>
   </body>

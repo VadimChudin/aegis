@@ -1397,7 +1397,40 @@ body.mac .chrome {
   display: flex;
   align-items: center;
   position: relative;
+  gap: 10px;
 }
+.density-open {
+  padding: 8px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.density-open:hover {
+  background: var(--fill-strong);
+  border-color: var(--chip-edge);
+}
+.browser-notice {
+  position: absolute;
+  z-index: 6;
+  top: 72px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  text-align: center;
+  font-size: 11px;
+}
+.browser-notice[hidden] { display: none; }
 /* out of flow, so expanding it never shifts the centred Paper/Auto switch */
 .chrome-center > .money-badge {
   position: absolute;

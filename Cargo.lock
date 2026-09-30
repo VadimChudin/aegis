@@ -20,7 +20,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-app"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aegis-core",
  "serde",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "hex",

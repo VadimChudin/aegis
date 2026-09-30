@@ -8,6 +8,7 @@ use crate::{
     broker::{network, read_json, require, BrokerError, Probe},
     checks::{clock, Checklist},
     market::{int, num, Candle, Timeframe},
+    market_depth::{DepthLevel, OrderBookSnapshot},
     sign::{hmac_sha256_hex, now_ms},
 };
 
@@ -139,6 +140,22 @@ impl Binance {
         parse_klines(&self.public(&path).await?)
     }
 
+    pub(crate) async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
+        let body = self
+            .public(&format!("/fapi/v1/depth?symbol={SYMBOL}&limit=500"))
+            .await?;
+        let snapshot = OrderBookSnapshot {
+            symbol: SYMBOL.into(),
+            timestamp: body["E"]
+                .as_u64()
+                .or_else(|| body["T"].as_u64())
+                .unwrap_or_else(|| now_ms() as u64),
+            bids: parse_depth_side(&body["bids"], "bids")?,
+            asks: parse_depth_side(&body["asks"], "asks")?,
+        };
+        validate_depth(snapshot, "Binance")
+    }
+
     async fn public(&self, path: &str) -> Result<Value, BrokerError> {
         let resp = self
             .http
@@ -171,6 +188,33 @@ impl Binance {
         }
         Ok(body)
     }
+}
+
+fn parse_depth_side(value: &Value, side: &str) -> Result<Vec<DepthLevel>, BrokerError> {
+    value
+        .as_array()
+        .ok_or_else(|| BrokerError::Parse(format!("Binance order book: {side} missing or not an array")))?
+        .iter()
+        .map(|row| {
+            let pair = row
+                .as_array()
+                .filter(|pair| pair.len() == 2)
+                .ok_or_else(|| BrokerError::Parse(format!("Binance order book: invalid {side} level {row}")))?;
+            Ok(DepthLevel {
+                price: num(&pair[0])
+                    .ok_or_else(|| BrokerError::Parse(format!("Binance order book: invalid price {row}")))?,
+                quantity: num(&pair[1])
+                    .ok_or_else(|| BrokerError::Parse(format!("Binance order book: invalid quantity {row}")))?,
+            })
+        })
+        .collect()
+}
+
+fn validate_depth(snapshot: OrderBookSnapshot, venue: &str) -> Result<OrderBookSnapshot, BrokerError> {
+    snapshot
+        .validate()
+        .map_err(|e| BrokerError::Parse(format!("{venue} order book: {e}")))?;
+    Ok(snapshot)
 }
 
 fn host(url: &str) -> String {

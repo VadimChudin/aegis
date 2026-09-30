@@ -16,6 +16,7 @@ use crate::{
     broker::{require, BrokerError, Probe},
     checks::{Check, Checklist},
     market::{Candle, Timeframe},
+    market_depth::OrderBookSnapshot,
 };
 
 const PROTOCOL: i64 = 1;
@@ -180,6 +181,16 @@ impl Mt5Bridge {
             )
             .await?;
         serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 candles: {e}")))
+    }
+
+    pub(crate) async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
+        let result = self.request(json!({"cmd": "order_book"}), REQUEST_TIMEOUT).await?;
+        let snapshot: OrderBookSnapshot =
+            serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 order book: {e}")))?;
+        snapshot
+            .validate()
+            .map_err(|e| BrokerError::Parse(format!("MT5 order book: {e}")))?;
+        Ok(snapshot)
     }
 
     pub(crate) async fn shutdown(&self) {

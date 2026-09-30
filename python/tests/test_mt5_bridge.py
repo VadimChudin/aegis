@@ -36,6 +36,66 @@ class BridgeTest(unittest.TestCase):
         checks = {c["id"]: c["status"] for c in conn["result"]["checks"]}
         self.assertEqual(checks, {"terminal": "ok", "algo": "warn", "trading": "ok", "symbol": "ok", "balance": "ok"})
 
+    def test_order_book_uses_terminal_dom_and_releases_subscription(self):
+        released_before = fake._state["book_releases"]
+        conn, book = run(
+            {"id": 1, "cmd": "connect", "login": 1, "password": "good", "server": "RoboForex-ECN"},
+            {"id": 2, "cmd": "order_book"},
+        )
+        self.assertTrue(conn["ok"], conn)
+        self.assertTrue(book["ok"], book)
+        snapshot = book["result"]
+        self.assertEqual(snapshot["symbol"], "XAUUSD.r")
+        self.assertGreater(snapshot["timestamp"], 0)
+        self.assertEqual([level["price"] for level in snapshot["bids"]], [4293.0, 4292.0])
+        self.assertEqual(snapshot["bids"][1]["quantity"], 3.5)
+        self.assertEqual([level["price"] for level in snapshot["asks"]], [4294.0, 4295.0])
+        self.assertEqual(fake._state["book_releases"], released_before + 1)
+
+    def test_unsupported_mt5_depth_returns_error_not_synthetic_data(self):
+        fake._state["book_supported"] = False
+        try:
+            conn, book = run(
+                {"id": 1, "cmd": "connect", "login": 1, "password": "good", "server": "RoboForex-ECN"},
+                {"id": 2, "cmd": "order_book"},
+            )
+            self.assertTrue(conn["ok"], conn)
+            self.assertFalse(book["ok"])
+            self.assertIn("market depth is unavailable", book["error"])
+        finally:
+            fake._state["book_supported"] = True
+
+    def test_market_orders_are_not_resting_densities(self):
+        fake._state["book"] = (
+            {"type": fake.BOOK_TYPE_BUY, "price": 4293.0, "volume": 2},
+            {"type": fake.BOOK_TYPE_SELL, "price": 4294.0, "volume": 3},
+            {"type": fake.BOOK_TYPE_BUY_MARKET, "price": 0.0, "volume": 100},
+            {"type": fake.BOOK_TYPE_SELL_MARKET, "price": 0.0, "volume": 100},
+        )
+        try:
+            _, book = run(
+                {"id": 1, "cmd": "connect", "login": 1, "password": "good", "server": "RoboForex-ECN"},
+                {"id": 2, "cmd": "order_book"},
+            )
+            self.assertTrue(book["ok"], book)
+            self.assertEqual(len(book["result"]["bids"]), 1)
+            self.assertEqual(len(book["result"]["asks"]), 1)
+        finally:
+            fake._state["book"] = None
+
+    def test_empty_mt5_dom_returns_an_explicit_error(self):
+        fake._state["book"] = ()
+        try:
+            conn, book = run(
+                {"id": 1, "cmd": "connect", "login": 1, "password": "good", "server": "RoboForex-ECN"},
+                {"id": 2, "cmd": "order_book"},
+            )
+            self.assertTrue(conn["ok"], conn)
+            self.assertFalse(book["ok"])
+            self.assertIn("market depth is empty", book["error"])
+        finally:
+            fake._state["book"] = None
+
     def test_failed_login_is_a_reply_not_a_crash(self):
         (conn, bars) = run(
             {"id": 1, "cmd": "connect", "login": 1, "password": "bad", "server": "x"},

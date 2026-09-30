@@ -1,6 +1,6 @@
 # AEGIS
 
-Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
+Desktop terminal for automated gold (XAU) trading. **v0.6.0:** a separate dockable gold-density screener with continuous broker-specific recording, the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
 
 ## What works
 
@@ -39,6 +39,17 @@ python/aegis_lab/      Python: MT5 bridge, Binance and Bybit archive downloaders
 scripts/mock_venues.py local Binance/Bybit stand-in for development and tests
 ```
 
+## Density screener
+
+The terminal opens a separate, dockable gold order-book density window at startup. It monitors the
+selected connected broker even while the window is hidden, and records sampled densities and
+observations as rotating JSONL files in the application data folder (`densities/`). Binance and
+Bybit provide exchange books; RoboForex requires the MT5 symbol to expose a DOM. Missing DOM is
+shown as unavailable, never substituted with candle or another venue's data. Scores describe
+observations, not calibrated probabilities; no live orders are placed.
+
+Full Bounce setting inventory and screener rules: [Русское описание](docs/density-screener.md).
+
 ## Develop
 
 Needs Rust (stable), Node 18+ and Python 3.9+. On Linux also the Tauri system libraries (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`).
@@ -62,7 +73,7 @@ AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit AEGIS_CONFIG_DIR=/tmp/aegis-dev carg
 Bump the version in `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/package.json`, add a `CHANGELOG` entry, then push a tag:
 
 ```bash
-git tag v0.5.1 && git push origin v0.5.1
+git tag v0.6.0 && git push origin v0.6.0
 ```
 
 GitHub Actions builds `AEGIS_<ver>_x64-setup.exe` (Windows) and `AEGIS_<ver>_universal.dmg` (macOS, Apple Silicon + Intel, ad-hoc signed; first launch needs *System Settings → Privacy & Security → Open Anyway*).

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-theme="glass-dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AEGIS · Densities</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="densities.css" />
+    <link rel="stylesheet" href="density-settings.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <main class="density-app">
+      <header class="density-head glass">
+        <div class="density-title-row">
+          <div>
+            <div class="density-eyebrow">AEGIS · XAU</div>
+            <h1 id="title">Densities</h1>
+          </div>
+          <button class="density-close close-icon" id="close" type="button" aria-label="Hide"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+        </div>
+        <div class="source-row">
+          <span class="status-dot" id="statusDot"></span>
+          <strong id="status">Waiting for source</strong>
+          <span class="source-name" id="source">—</span>
+        </div>
+        <div class="record-row">
+          <span class="record-indicator" id="recordIndicator"></span>
+          <span id="recording">Recording inactive</span>
+          <span class="updated" id="updated">—</span>
+        </div>
+        <p class="error" id="error" hidden></p>
+      </header>
+
+      <section class="density-controls glass" aria-label="Density controls">
+        <div class="controls-top">
+          <span class="section-title" id="listTitle">Live density list</span>
+          <label class="dock-control"><input id="docked" type="checkbox" checked /><span id="dockLabel">Keep beside terminal</span></label>
+        </div>
+        <div class="sort-row">
+          <span class="muted" id="sortLabel">Sort by</span>
+          <button class="sort-button" id="sortDistance" type="button">Distance</button>
+          <button class="sort-button on" id="sortStrength" type="button">Strength</button>
+          <span class="sort-note" id="distanceNote" hidden></span>
+        </div>
+        <div class="density-thresholds" id="thresholds" aria-live="polite"></div>
+        <p class="density-sampling" id="sampling"></p>
+      </section>
+
+      <section class="density-list" id="rows" aria-live="polite"></section>
+      <footer class="density-foot">
+        <span id="probabilityNote">Probability is not calibrated.</span>
+        <span id="scoreNote">Score is observational, not a probability.</span>
+        <span id="storage">History is saved in app data · densities</span>
+      </footer>
+    </main>
+    <script src="density-settings.js"></script>
+    <script src="densities.js"></script>
+  </body>
+</html>

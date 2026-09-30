@@ -7,6 +7,7 @@ use crate::{
     broker::{network, read_json, require, BrokerError, Probe},
     checks::{clock, Checklist},
     market::{int, num, Candle, Timeframe},
+    market_depth::{DepthLevel, OrderBookSnapshot},
     sign::{hmac_sha256_hex, now_ms},
 };
 
@@ -151,6 +152,32 @@ impl Bybit {
         parse_klines(&self.public(&path).await?)
     }
 
+    pub(crate) async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
+        let body = self
+            .public(&format!(
+                "/v5/market/orderbook?category=linear&symbol={SYMBOL}&limit=200"
+            ))
+            .await?;
+        let result = &body["result"];
+        let symbol = result["s"]
+            .as_str()
+            .ok_or_else(|| BrokerError::Parse("Bybit order book: result.s missing".into()))?;
+        let timestamp = int(&result["ts"])
+            .ok_or_else(|| BrokerError::Parse("Bybit order book: result.ts missing or invalid".into()))?;
+        let timestamp = u64::try_from(timestamp)
+            .map_err(|_| BrokerError::Parse("Bybit order book: result.ts must be positive".into()))?;
+        let snapshot = OrderBookSnapshot {
+            symbol: symbol.to_string(),
+            timestamp,
+            bids: parse_depth_side(&result["b"], "bids")?,
+            asks: parse_depth_side(&result["a"], "asks")?,
+        };
+        snapshot
+            .validate()
+            .map_err(|e| BrokerError::Parse(format!("Bybit order book: {e}")))?;
+        Ok(snapshot)
+    }
+
     async fn public(&self, path: &str) -> Result<Value, BrokerError> {
         let resp = self
             .http
@@ -176,6 +203,26 @@ impl Bybit {
             .map_err(network)?;
         checked(read_json(VENUE, resp).await?)
     }
+}
+
+fn parse_depth_side(value: &Value, side: &str) -> Result<Vec<DepthLevel>, BrokerError> {
+    value
+        .as_array()
+        .ok_or_else(|| BrokerError::Parse(format!("Bybit order book: {side} missing or not an array")))?
+        .iter()
+        .map(|row| {
+            let pair = row
+                .as_array()
+                .filter(|pair| pair.len() == 2)
+                .ok_or_else(|| BrokerError::Parse(format!("Bybit order book: invalid {side} level {row}")))?;
+            Ok(DepthLevel {
+                price: num(&pair[0])
+                    .ok_or_else(|| BrokerError::Parse(format!("Bybit order book: invalid price {row}")))?,
+                quantity: num(&pair[1])
+                    .ok_or_else(|| BrokerError::Parse(format!("Bybit order book: invalid quantity {row}")))?,
+            })
+        })
+        .collect()
 }
 
 /// Account type, permissions and IP binding from `/v5/user/query-api`.
