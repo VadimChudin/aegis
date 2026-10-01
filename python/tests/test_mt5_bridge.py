@@ -36,6 +36,64 @@ class BridgeTest(unittest.TestCase):
         checks = {c["id"]: c["status"] for c in conn["result"]["checks"]}
         self.assertEqual(checks, {"terminal": "ok", "algo": "warn", "trading": "ok", "symbol": "ok", "balance": "ok"})
 
+    def setUp(self):
+        fake._state.update(running=True, online=True, tick_age=0)
+
+    def tearDown(self):
+        fake._state.update(running=True, online=True, tick_age=0)
+
+    def _connected(self):
+        bridge = Bridge(fake)
+        bridge.connect({"login": 1, "password": "good", "server": "RoboForex-ECN"})
+        return bridge
+
+    def test_offset_is_only_taken_from_a_fresh_tick(self):
+        measure = Bridge._measure_offset
+        now = 1_790_000_000.0
+        self.assertEqual(measure(now + 3 * 3600 + 3, now), 3 * 3600)
+        self.assertEqual(measure(now + 2 * 3600 - 30, now), 2 * 3600)
+        self.assertIsNone(measure(now + 3 * 3600 - 45 * 60, now))  # tick 45 min old: daily break
+        self.assertIsNone(measure(now - 2 * 86400, now))  # weekend
+        self.assertIsNone(measure(0, now))
+
+    def test_login_while_market_closed_learns_offset_later(self):
+        fake._state["tick_age"] = 40 * 60
+        bridge = self._connected()
+        self.assertFalse(bridge.offset_known)
+        fake._state["tick_age"] = 0
+        bars = bridge.candles({"timeframe": "15m", "limit": 1})
+        self.assertTrue(bridge.offset_known)
+        self.assertEqual(bars[0]["time"], 1_790_208_000)
+
+    def test_stale_tick_keeps_the_known_offset(self):
+        bridge = self._connected()
+        fake._state["tick_age"] = 50 * 60
+        self.assertEqual(bridge.ping()["server_offset"], 3 * 3600)
+
+    def test_offline_terminal_is_an_error_not_stale_bars(self):
+        bridge = self._connected()
+        fake._state["online"] = False
+        with self.assertRaisesRegex(Exception, "lost the connection"):
+            bridge.candles({"timeframe": "1m", "limit": 2})
+        fake._state["online"] = True
+        self.assertEqual(len(bridge.candles({"timeframe": "1m", "limit": 2})), 2)
+
+    def test_closed_terminal_is_reopened_with_the_saved_login(self):
+        bridge = self._connected()
+        before = fake._state["inits"]
+        fake._state["running"] = False
+        bars = bridge.candles({"timeframe": "1m", "limit": 2})
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(fake._state["inits"], before + 1)
+        fake._state["running"] = False
+        fake._state["logged_in"] = False
+        with self.assertRaisesRegex(Exception, "reconnecting"):
+            bridge.candles({"timeframe": "1m", "limit": 2})  # within the retry pause
+
+    def test_ping_before_connect(self):
+        (reply,) = run({"id": 1, "cmd": "ping"})
+        self.assertEqual(reply, {"id": 1, "ok": False, "error": "not connected"})
+
     def test_order_book_uses_terminal_dom_and_releases_subscription(self):
         released_before = fake._state["book_releases"]
         conn, book = run(

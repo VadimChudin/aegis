@@ -19,12 +19,18 @@ _state = {
     "book_supported": True,
     "book": None,
     "book_releases": 0,
+    "running": True,
+    "online": True,
+    "tick_age": 0,
+    "inits": 0,
 }
 
 
 def initialize(path=None, login=None, password=None, server=None, timeout=None):
+    _state["inits"] += 1
     if login == 1 and password == "good":
         _state["logged_in"] = True
+        _state["running"] = True
         return True
     _state["error"] = (-6, "Terminal: Authorization failed")
     return False
@@ -44,7 +50,9 @@ def account_info():
 
 
 def terminal_info():
-    return SimpleNamespace(connected=True, trade_allowed=False, company="RoboForex Ltd", build=5120)
+    if not _state["running"]:
+        return None
+    return SimpleNamespace(connected=_state["online"], trade_allowed=False, company="RoboForex Ltd", build=5120)
 
 
 def symbols_get(group=None):
@@ -60,7 +68,7 @@ def symbol_select(name, enable):
 
 
 def symbol_info_tick(name):
-    return SimpleNamespace(time=int(time.time()) + SERVER_OFFSET)
+    return SimpleNamespace(time=int(time.time()) + SERVER_OFFSET - _state["tick_age"])
 
 
 def copy_rates_from_pos(symbol, timeframe, start, count):
