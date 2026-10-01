@@ -98,3 +98,19 @@ async fn missing_python_is_a_failed_check() {
     assert_eq!(report.checks[0].status, CheckStatus::Fail);
     assert!(report.checks[0].detail.contains("Python was not found"), "{report:?}");
 }
+
+#[tokio::test]
+async fn crashed_bridge_is_restarted_and_logged_back_in() {
+    let (conn, report) = Connector::connect(creds("1", "good"), &options()).await;
+    let conn = conn.unwrap_or_else(|| panic!("connect: {report:?}"));
+    assert_eq!(conn.candles(Timeframe::M1, 2).await.expect("before").len(), 2);
+    conn.kill_bridge_for_test().await;
+    // Restarts are paced: right after the crash the feed sees a readable error...
+    let err = conn.candles(Timeframe::M1, 2).await.expect_err("dead bridge");
+    assert!(err.to_string().contains("restarting"), "{err}");
+    // ...and once the pause is over the session works again without a new login.
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    let bars = conn.candles(Timeframe::M15, 3).await.expect("after restart");
+    assert_eq!(bars[0].time, 1_790_208_000);
+    conn.close().await;
+}

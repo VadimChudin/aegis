@@ -25,6 +25,10 @@ TIMEFRAMES = {
     "1d": "TIMEFRAME_D1",
 }
 MAX_BARS = 5000
+# A tick this close to a whole-hour offset is fresh enough to measure the server clock.
+OFFSET_TOLERANCE = 120
+# Minimum pause between attempts to re-open a lost terminal (IPC) connection.
+REINIT_PAUSE = 5.0
 
 
 class BridgeError(Exception):
@@ -36,6 +40,9 @@ class Bridge:
         self._mt5 = mt5
         self.symbol = None
         self.offset = 0
+        self.offset_known = False
+        self._login = None
+        self._last_reinit = 0.0
 
     def mt5(self):
         if self._mt5 is None:
@@ -66,13 +73,11 @@ class Bridge:
             "timeout": 30000,
         }
         path = req.get("terminal_path")
-        ok = mt5.initialize(path, **kwargs) if path else mt5.initialize(**kwargs)
-        if not ok:
-            code, message = mt5.last_error()
-            mt5.shutdown()
-            raise BridgeError(f"MT5 login failed ({code}): {message}")
+        self._initialize(mt5, path, kwargs)
+        self._login = (path, kwargs)
         self.symbol = self._find_symbol(mt5)
-        self.offset = self._server_offset(mt5)
+        self.offset_known = False
+        self._refresh_offset(mt5)
         info = mt5.account_info()
         account = (
             f"{info.login} · {info.server} · {info.currency} {info.balance:.2f}" if info else f"{kwargs['login']}"
@@ -126,21 +131,71 @@ class Bridge:
                 return name
         raise BridgeError("this MT5 account has no XAUUSD symbol")
 
-    def _server_offset(self, mt5):
-        # Bars carry trade-server time (RoboForex runs UTC+2/+3), not UTC. The last
-        # tick gives the offset in whole hours; a stale tick (market closed) gives none.
-        tick = mt5.symbol_info_tick(self.symbol)
-        if not tick or not tick.time:
-            return 0
-        diff = tick.time - time.time()
+    @staticmethod
+    def _initialize(mt5, path, kwargs):
+        ok = mt5.initialize(path, **kwargs) if path else mt5.initialize(**kwargs)
+        if not ok:
+            code, message = mt5.last_error()
+            mt5.shutdown()
+            raise BridgeError(f"MT5 login failed ({code}): {message}")
+
+    @staticmethod
+    def _measure_offset(tick_time, now):
+        """Server offset in whole hours, or None when the tick is too old to tell.
+
+        Bars carry trade-server time (RoboForex runs UTC+2 in winter, UTC+3 in summer).
+        A fresh tick sits within a couple of minutes of a whole-hour offset; a stale one
+        (weekend, daily break) does not, and must not overwrite a known offset.
+        """
+        if not tick_time:
+            return None
+        diff = tick_time - now
         if abs(diff) > 14 * 3600:
-            return 0
-        return int(round(diff / 3600.0)) * 3600
+            return None
+        hours = round(diff / 3600.0)
+        if abs(diff - hours * 3600) > OFFSET_TOLERANCE:
+            return None
+        return int(hours) * 3600
+
+    def _refresh_offset(self, mt5):
+        # Re-measured on every request: catches the DST switch and a login made while
+        # the market was closed (when the first measurement is impossible).
+        tick = mt5.symbol_info_tick(self.symbol)
+        offset = self._measure_offset(getattr(tick, "time", 0) if tick else 0, time.time())
+        if offset is not None:
+            self.offset = offset
+            self.offset_known = True
+
+    def _ensure_terminal(self, mt5):
+        """Fails loudly when the terminal is gone or offline instead of serving stale bars.
+
+        A closed or crashed terminal (no IPC) is re-opened with the saved login, at most
+        once every few seconds. A terminal that lost the trade server reconnects by itself,
+        so the bridge only reports it.
+        """
+        term = mt5.terminal_info()
+        if term is None and self._login is not None:
+            now = time.monotonic()
+            if now - self._last_reinit < REINIT_PAUSE:
+                raise BridgeError("the MT5 terminal is not running; reconnecting")
+            self._last_reinit = now
+            path, kwargs = self._login
+            mt5.shutdown()
+            self._initialize(mt5, path, kwargs)
+            if not mt5.symbol_select(self.symbol, True):
+                raise BridgeError(f"reconnected, but {self.symbol} cannot be selected")
+            term = mt5.terminal_info()
+        if term is None:
+            raise BridgeError("the MT5 terminal is not running")
+        if not term.connected:
+            raise BridgeError("the MT5 terminal lost the connection to the trade server")
 
     def candles(self, req):
         if not self.symbol:
             raise BridgeError("not connected")
         mt5 = self.mt5()
+        self._ensure_terminal(mt5)
+        self._refresh_offset(mt5)
         name = TIMEFRAMES.get(req.get("timeframe"))
         if name is None:
             raise BridgeError(f"unknown timeframe: {req.get('timeframe')}")
@@ -166,6 +221,7 @@ class Bridge:
         if not self.symbol:
             raise BridgeError("not connected")
         mt5 = self.mt5()
+        self._ensure_terminal(mt5)
         if not mt5.market_book_add(self.symbol):
             code, message = mt5.last_error()
             raise BridgeError(f"MT5 market depth is unavailable for {self.symbol} ({code}): {message}")
@@ -205,10 +261,20 @@ class Bridge:
         finally:
             mt5.market_book_release(self.symbol)
 
+    def ping(self, _req=None):
+        """Cheap health check: terminal alive, online, and the clock offset in use."""
+        if not self.symbol:
+            raise BridgeError("not connected")
+        mt5 = self.mt5()
+        self._ensure_terminal(mt5)
+        self._refresh_offset(mt5)
+        return {"symbol": self.symbol, "server_offset": self.offset, "offset_known": self.offset_known}
+
     def shutdown(self, _req=None):
         if self._mt5 is not None:
             self._mt5.shutdown()
         self.symbol = None
+        self._login = None
         return {}
 
 
@@ -218,6 +284,7 @@ def serve(bridge, stdin, stdout):
         "connect": bridge.connect,
         "candles": bridge.candles,
         "order_book": bridge.order_book,
+        "ping": bridge.ping,
         "shutdown": bridge.shutdown,
     }
     try:

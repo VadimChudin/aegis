@@ -371,6 +371,9 @@
     S.settings = await invoke("settings_get");
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel(id);
+    // A successful reconnect replaces the session and stops its feed; reload the chart
+    // so it keeps updating instead of freezing on the old generation.
+    if (report?.connected && S.chart.broker === id && !S.btView) return loadChart(id);
     await ensureChart();
   }
 

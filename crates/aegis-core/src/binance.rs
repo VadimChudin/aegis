@@ -1,6 +1,9 @@
 //! Binance USDⓈ-M futures: XAUUSDT perpetual (TradFi perps, listed January 2026).
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicI64, Ordering},
+    time::Duration,
+};
 
 use serde_json::Value;
 
@@ -33,6 +36,9 @@ pub struct Binance {
     spot: String,
     key: String,
     secret: String,
+    /// Server clock minus local clock, measured at connect; added to signed timestamps
+    /// so a drifting PC clock does not get requests rejected with -1021.
+    clock_ms: AtomicI64,
 }
 
 impl Binance {
@@ -49,6 +55,7 @@ impl Binance {
             spot: trim(spot.unwrap_or_else(|| DEFAULT_SPOT_URL.into())),
             key: require(key, "API key")?,
             secret: require(secret, "Secret key")?,
+            clock_ms: AtomicI64::new(0),
         })
     }
 
@@ -68,7 +75,9 @@ impl Binance {
             Ok(body) => {
                 list.ok("reach", "Binance reachable", host(&self.base));
                 let local = (started + now_ms()) / 2;
-                clock(&mut list, int(&body["serverTime"]).unwrap_or(local) - local);
+                let skew = int(&body["serverTime"]).unwrap_or(local) - local;
+                clock(&mut list, skew);
+                self.clock_ms.store(skew, Ordering::Relaxed);
             }
         }
 
@@ -172,7 +181,8 @@ impl Binance {
 
     async fn signed(&self, base: &str, path: &str, params: &str) -> Result<Value, BrokerError> {
         let sep = if params.is_empty() { "" } else { "&" };
-        let query = format!("{params}{sep}recvWindow=5000&timestamp={}", now_ms());
+        let ts = now_ms() + self.clock_ms.load(Ordering::Relaxed);
+        let query = format!("{params}{sep}recvWindow=5000&timestamp={ts}");
         let signature = hmac_sha256_hex(&self.secret, &query);
         let url = format!("{base}{path}?{query}&signature={signature}");
         let resp = self
@@ -276,8 +286,16 @@ fn permissions_check(list: &mut Checklist, body: &Value) {
 }
 
 pub(crate) fn http_client() -> Result<reqwest::Client, BrokerError> {
+    // Short connect timeout so a dead route fails fast and the feed backs off; TCP
+    // keepalive and a bounded idle pool so a connection silently dropped by a router,
+    // VPN or the venue is detected and replaced instead of hanging a request.
     reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
+        .tcp_keepalive(Duration::from_secs(30))
+        .tcp_nodelay(true)
+        .pool_idle_timeout(Duration::from_secs(50))
+        .pool_max_idle_per_host(4)
         .user_agent(concat!("AEGIS/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(network)

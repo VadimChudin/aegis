@@ -1,5 +1,7 @@
 //! Bybit V5, linear USDT perpetual XAUUSDT.
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use serde_json::Value;
 
 use crate::{
@@ -32,6 +34,8 @@ pub struct Bybit {
     base: String,
     key: String,
     secret: String,
+    /// Server clock minus local clock, measured at connect; added to signed timestamps.
+    clock_ms: AtomicI64,
 }
 
 fn interval(tf: Timeframe) -> &'static str {
@@ -60,6 +64,7 @@ impl Bybit {
                 .to_string(),
             key: require(key, "API key")?,
             secret: require(secret, "API secret")?,
+            clock_ms: AtomicI64::new(0),
         })
     }
 
@@ -86,7 +91,9 @@ impl Bybit {
                 let server = int(&body["result"]["timeNano"])
                     .map(|n| n / 1_000_000)
                     .or_else(|| int(&body["time"]));
-                clock(&mut list, server.unwrap_or(local) - local);
+                let skew = server.unwrap_or(local) - local;
+                clock(&mut list, skew);
+                self.clock_ms.store(skew, Ordering::Relaxed);
             }
         }
 
@@ -189,7 +196,7 @@ impl Bybit {
     }
 
     async fn signed(&self, path: &str, query: &str) -> Result<Value, BrokerError> {
-        let ts = now_ms();
+        let ts = now_ms() + self.clock_ms.load(Ordering::Relaxed);
         let sep = if query.is_empty() { "" } else { "?" };
         let resp = self
             .http
