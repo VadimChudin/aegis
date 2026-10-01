@@ -26,7 +26,7 @@
       document.documentElement.lang = I.lang;
       I.apply(document);
     },
-    /** Translates static markup: data-i18n (text), data-i18n-title (tooltip). */
+    /** Translates static text, tooltips and accessible labels. */
     apply(root) {
       root.querySelectorAll("[data-i18n]").forEach((el) => {
         if (!el.dataset.i18nSrc) el.dataset.i18nSrc = el.textContent.trim();
@@ -35,6 +35,10 @@
       root.querySelectorAll("[data-i18n-title]").forEach((el) => {
         if (!el.dataset.i18nTitleSrc) el.dataset.i18nTitleSrc = el.getAttribute("title") || "";
         el.setAttribute("title", I.t(el.dataset.i18nTitleSrc));
+      });
+      root.querySelectorAll("[data-i18n-aria-label]").forEach((el) => {
+        if (!el.dataset.i18nAriaLabelSrc) el.dataset.i18nAriaLabelSrc = el.getAttribute("aria-label") || "";
+        el.setAttribute("aria-label", I.t(el.dataset.i18nAriaLabelSrc));
       });
     },
   };
