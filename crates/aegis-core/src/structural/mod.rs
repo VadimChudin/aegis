@@ -520,6 +520,10 @@ mod tests {
         let slipped = backtest(&ticks, &p).unwrap();
         assert!(slipped.trades[0].entry_px < base.trades[0].entry_px);
         assert!(slipped.trades[0].exit_px > base.trades[0].exit_px);
-        assert!(slipped.total_r < base.total_r);
+        // R uses each execution's own entry-to-stop risk, which also changes with slippage.
+        // Compare dollars per unit, not differently normalised R values.
+        assert!(
+            slipped.trades[0].entry_px - slipped.trades[0].exit_px < base.trades[0].entry_px - base.trades[0].exit_px
+        );
     }
 }
