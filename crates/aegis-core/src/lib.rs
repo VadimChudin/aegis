@@ -9,6 +9,7 @@ pub mod market;
 pub mod market_depth;
 pub mod settings;
 pub mod strategy;
+pub mod structural;
 
 mod binance;
 mod bybit;

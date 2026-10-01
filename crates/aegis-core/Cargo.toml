@@ -20,4 +20,5 @@ log.workspace = true
 aes-gcm = "0.10"
 whoami = "1"
 rayon = "1"
+flate2 = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }

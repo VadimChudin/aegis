@@ -4,6 +4,7 @@ Desktop terminal for automated gold (XAU) trading. **v0.6.0:** a separate dockab
 
 ## What works
 
+- **Structural reversal (experimental):** independent slider/toggle panel on six-month Bybit trade archives, cached native downloads, custom presets and a red **Setup 1 + · +0.85R / 5 trades** retrospective preset. No live orders; five trades do not prove profitability. Rules and limitations: [`docs/structural-reversal.md`](docs/structural-reversal.md).
 - **Brokers:** Binance (USDⓈ-M futures `XAUUSDT`), Bybit (USDT perpetual `XAUUSDT`) and RoboForex (MetaTrader 5 `XAUUSD`). **All three can be connected at the same time.**
 - **Chart source:** pick any connected broker in the header. The chart only ever shows that broker's data; it never mixes venues.
 - **Timeframes:** 1m, 5m, 15m, 1h, 4h, 1d. 500 bars of history, then the last bar updates every second.

@@ -2044,6 +2044,12 @@ details.adv[open] > summary {
   stroke-width: 1.6;
   vector-effect: non-scaling-stroke;
 }
+
+.st-research { width:100%; border:1px solid #ef4444; background:rgba(239,68,68,.16); color:#ff7272; border-radius:12px; padding:14px; font-weight:700; cursor:pointer; }
+.st-research:hover { background:rgba(239,68,68,.26); }
+.st-dates { display:flex; gap:12px; margin:16px 0; }
+.st-dates label { display:flex; flex-direction:column; gap:6px; color:var(--muted); min-width:0; }
+.st-dates input { background:var(--surface); color:var(--text); padding:8px; border:1px solid var(--line); border-radius:8px; }
 .bt-equity line {
   stroke: var(--hair);
   vector-effect: non-scaling-stroke;

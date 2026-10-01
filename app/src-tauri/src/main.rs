@@ -2,6 +2,7 @@
 
 mod bounce_cmd;
 mod density_cmd;
+mod structural_cmd;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -50,6 +51,7 @@ struct AppState {
     /// Public futures API for the latest klines (no key needed).
     binance_public: String,
     density: density_cmd::DensityState,
+    structural: structural_cmd::StructuralState,
 }
 
 impl AppState {
@@ -171,6 +173,7 @@ mod tests {
             cache_dir: std::env::temp_dir(),
             binance_public: String::new(),
             density: density_cmd::DensityState::new(std::env::temp_dir().join("aegis-test-densities")),
+            structural: structural_cmd::StructuralState::default(),
         };
         let fields = |secret: &str| {
             BTreeMap::from([
@@ -490,6 +493,7 @@ fn setup_state(app: &AppHandle) -> AppState {
         bounce: bounce_cmd::BounceState::default(),
         cache_dir,
         binance_public,
+        structural: structural_cmd::StructuralState::default(),
         density: density_cmd::DensityState::new(
             app.path()
                 .app_data_dir()
@@ -531,6 +535,9 @@ fn main() {
             bounce_cmd::bounce_validate,
             bounce_cmd::bounce_optimize,
             bounce_cmd::bounce_preset_save,
+            structural_cmd::structural_info,
+            structural_cmd::structural_save,
+            structural_cmd::structural_backtest,
             set_lang
         ])
         .build(tauri::generate_context!())

@@ -86,6 +86,13 @@ stub!(
     "Trades the return after price runs the stops beyond a swing high or low."
 );
 stub!(
+    Structural,
+    "structural",
+    "Structural reversal",
+    "Experimental prior-day raid, reclaim and structure confirmation on Bybit trade ticks. Backtest only.",
+    Backtest
+);
+stub!(
     Data,
     "data",
     "DATA",
@@ -96,6 +103,7 @@ pub fn registry() -> Vec<Box<dyn Strategy>> {
     vec![
         Box::new(Breakout),
         Box::new(Bounce),
+        Box::new(Structural),
         Box::new(LiquiditySweep),
         Box::new(Data),
     ]
@@ -110,14 +118,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn four_slots_with_unique_ids() {
+    fn five_slots_with_unique_ids() {
         let names: Vec<_> = catalog().iter().map(|s| s.name).collect();
-        assert_eq!(names, ["Breakout", "Bounce", "Liquidity Sweep", "DATA"]);
+        assert_eq!(
+            names,
+            ["Breakout", "Bounce", "Structural reversal", "Liquidity Sweep", "DATA"]
+        );
         let mut ids: Vec<_> = catalog().iter().map(|s| s.id).collect();
         ids.dedup();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         for s in catalog() {
-            let want = if s.id == "bounce" {
+            let want = if s.id == "bounce" || s.id == "structural" {
                 StrategyStatus::Backtest
             } else {
                 StrategyStatus::Stub

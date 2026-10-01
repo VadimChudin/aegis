@@ -448,6 +448,11 @@
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.bounce.render($("panelBody"));
+    } else if (kind === "structural" && window.AEGIS.structural) {
+      $("panelTitle").textContent = t("Structural reversal");
+      $("panel").classList.add("wide", "strategy");
+      document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
+      window.AEGIS.structural.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
@@ -626,7 +631,8 @@
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
-    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
+    if (S.panel === "structural" && window.AEGIS.structural) window.AEGIS.structural.render($("panelBody"));
+    const titles = { brokers: "Brokers", bounce: "Bounce", structural: "Structural reversal", theme: "Settings" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
   }
 
