@@ -183,8 +183,13 @@
 
   // ---- custom select (same markup as Vespera) ---------------------------------
 
-  function closeMenus() {
-    document.querySelectorAll(".v-menu.open").forEach((m) => m.classList.remove("open"));
+  function closeMenus(restoreFocus = false) {
+    document.querySelectorAll(".v-menu.open").forEach((m) => {
+      const btn = m.previousElementSibling;
+      if (restoreFocus && m.contains(document.activeElement)) btn.focus();
+      m.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    });
   }
 
   function fillOpt(node, opt) {
@@ -209,6 +214,10 @@
     btn.type = "button";
     btn.className = "v-select-btn";
     btn.disabled = disabled;
+    btn.id = `${id}-button`;
+    btn.setAttribute("aria-haspopup", "menu");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", `${id}-menu`);
     const face = document.createElement("span");
     face.className = "v-face";
     const current = options.find((o) => o.value === value) || options[0];
@@ -219,23 +228,52 @@
     btn.append(face, chev);
     const menu = document.createElement("div");
     menu.className = "v-menu";
+    menu.id = `${id}-menu`;
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-labelledby", btn.id);
     for (const opt of options) {
       const item = document.createElement("button");
       item.type = "button";
       item.className = `v-opt${opt.img ? " has-ico" : ""}${opt.value === value ? " on" : ""}`;
+      item.setAttribute("role", "menuitemradio");
+      item.setAttribute("aria-checked", String(opt.value === value));
+      item.tabIndex = -1;
       fillOpt(item, opt);
       item.onclick = (e) => {
         e.stopPropagation();
         closeMenus();
         if (opt.value !== value) onChange(opt.value);
+        document.getElementById(id)?.querySelector(".v-select-btn").focus();
       };
       menu.appendChild(item);
     }
+    const openMenu = () => {
+      closeMenus();
+      if (disabled) return;
+      menu.classList.add("open");
+      btn.setAttribute("aria-expanded", "true");
+      (menu.querySelector(".on") || menu.firstElementChild)?.focus();
+    };
     btn.onclick = (e) => {
       e.stopPropagation();
       const open = menu.classList.contains("open");
       closeMenus();
-      if (!open && !disabled) menu.classList.add("open");
+      if (!open) openMenu();
+    };
+    btn.onkeydown = (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        openMenu();
+      }
+    };
+    menu.onkeydown = (e) => {
+      const items = [...menu.children];
+      const index = items.indexOf(document.activeElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        e.preventDefault();
+        const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : (index + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+      } else if (e.key === "Tab") closeMenus(true);
     };
     wrap.append(btn, menu);
     return wrap;
@@ -402,24 +440,47 @@
 
   // ---- panels -------------------------------------------------------------------
 
+  let overlayOpener = null;
+
+  function rememberOverlayOpener() {
+    if (!overlayOpener) overlayOpener = document.activeElement;
+  }
+
+  function syncOverlayFocus() {
+    const open = !$("panel").hidden || !$("sheet").hidden;
+    document.querySelector(".app").inert = open;
+    $("sheet").inert = !$("panel").hidden;
+    $("btnMenu").setAttribute("aria-expanded", String(!$("sheet").hidden));
+    if (!open) {
+      if (overlayOpener) (overlayOpener.isConnected ? overlayOpener : $("btnMenu")).focus({ preventScroll: true });
+      overlayOpener = null;
+    }
+  }
+
   function openSheet(show) {
+    if (show) rememberOverlayOpener();
     $("sheet").hidden = !show;
     $("backdrop").hidden = !show && $("panel").hidden;
+    syncOverlayFocus();
+    if (show) $("sheet").querySelector("button").focus();
   }
 
   function closePanel() {
+    if ($("panel").hidden) return;
     $("panel").hidden = true;
     $("panel").classList.remove("wide", "strategy");
-    $("backdrop").hidden = true;
+    $("backdrop").hidden = $("sheet").hidden;
     $("panelBody").replaceChildren();
     document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
     document.body.classList.remove("panel-open");
     document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("on", b.dataset.panel === "chart"));
+    syncOverlayFocus();
   }
 
   function openPanel(kind, focus) {
-    openSheet(false);
+    rememberOverlayOpener();
+    $("sheet").hidden = true;
     closeMenus();
     S.panel = kind;
     document.body.classList.add("panel-open");
@@ -442,6 +503,8 @@
       $("panel").classList.remove("wide");
       renderThemePanel();
     }
+    syncOverlayFocus();
+    $("panelClose").focus();
   }
 
   const ICON = { ok: "\u2713", warn: "!", fail: "\u2715", skip: "\u2013" };
@@ -681,12 +744,24 @@
     renderStrategies(b.strategies);
     listenFeed();
 
-    document.addEventListener("click", closeMenus);
+    document.addEventListener("click", () => closeMenus(true));
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        closeMenus();
+        e.preventDefault();
+        if (document.querySelector(".v-menu.open")) return closeMenus(true);
         closePanel();
         openSheet(false);
+      } else if (e.key === "Tab") {
+        const overlay = !$("panel").hidden ? $("panel") : !$("sheet").hidden ? $("sheet") : null;
+        if (!overlay) return;
+        const targets = [...overlay.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')].filter(
+          (node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length,
+        );
+        const edge = e.shiftKey ? targets[0] : targets[targets.length - 1];
+        if (document.activeElement === edge || !overlay.contains(document.activeElement)) {
+          e.preventDefault();
+          (e.shiftKey ? targets[targets.length - 1] : targets[0])?.focus();
+        }
       }
     });
     $("btnMenu").onclick = () => openSheet($("sheet").hidden);
