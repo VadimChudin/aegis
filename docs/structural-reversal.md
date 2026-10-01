@@ -32,6 +32,10 @@ The target is not moved outward after entry; the remaining R/R can be much less 
 
 Select an inclusive date range up to 184 completed UTC days, starting no earlier than the
 Bybit XAUUSDT listing on 2026-03-09. Daily public gzip trade archives download once into the app
+history cache. The first selected day supplies the previous-day range and has no eligible
+signals itself: select one extra day before the desired first trading day. This deliberately
+preserves the original six-month study's warmup convention (no March data in that preset).
+The files are stored in the app
 history cache (`bybit-trades`). Each repeat uses disk and a same-range memory cache. Different
 ranges load a new tape. Download errors abort rather than silently omit days. Trade IDs are
 deduplicated, positive finite prices/volumes and daily timestamps validated; stable timestamp

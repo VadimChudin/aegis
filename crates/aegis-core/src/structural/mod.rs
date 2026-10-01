@@ -498,4 +498,28 @@ mod tests {
         p.values.insert("min_rr".into(), 2.);
         assert!(backtest(&ticks, &p).unwrap().trades.is_empty());
     }
+
+    #[test]
+    fn short_slippage_reduces_sale_price_and_worsens_buyback() {
+        let mut p = Params::default();
+        p.values.insert("space".into(), 0.);
+        p.values.insert("taker".into(), 0.);
+        let ticks: Vec<_> = episode(true)
+            .into_iter()
+            .map(|t| Tick {
+                price: 200. - t.price,
+                buy: !t.buy,
+                ..t
+            })
+            .collect();
+        p.values.insert("slip".into(), 0.);
+        let base = backtest(&ticks, &p).unwrap();
+        assert_eq!(base.trades.len(), 1);
+        assert_eq!(base.trades[0].side, -1);
+        p.values.insert("slip".into(), 0.1);
+        let slipped = backtest(&ticks, &p).unwrap();
+        assert!(slipped.trades[0].entry_px < base.trades[0].entry_px);
+        assert!(slipped.trades[0].exit_px > base.trades[0].exit_px);
+        assert!(slipped.total_r < base.total_r);
+    }
 }
