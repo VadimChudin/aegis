@@ -423,6 +423,14 @@ impl Connector {
         }
     }
 
+    /// Kills the MT5 bridge process as a crash would (tests only).
+    #[doc(hidden)]
+    pub async fn kill_bridge_for_test(&self) {
+        if let Connector::Roboforex(c) = self {
+            c.kill_for_test().await;
+        }
+    }
+
     /// Releases the venue session (logs the MT5 terminal out and stops the bridge).
     pub async fn close(&self) {
         if let Connector::Roboforex(c) = self {

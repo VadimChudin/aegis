@@ -12,12 +12,14 @@ __version__ = "5.0.5120"
 TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 1, 5, 15, 16385, 16388, 16408
 SERVER_OFFSET = 3 * 3600
 
-_state = {"logged_in": False, "error": (1, "Success")}
+_state = {"logged_in": False, "error": (1, "Success"), "running": True, "online": True, "tick_age": 0, "inits": 0}
 
 
 def initialize(path=None, login=None, password=None, server=None, timeout=None):
+    _state["inits"] += 1
     if login == 1 and password == "good":
         _state["logged_in"] = True
+        _state["running"] = True
         return True
     _state["error"] = (-6, "Terminal: Authorization failed")
     return False
@@ -37,7 +39,9 @@ def account_info():
 
 
 def terminal_info():
-    return SimpleNamespace(connected=True, trade_allowed=False, company="RoboForex Ltd", build=5120)
+    if not _state["running"]:
+        return None
+    return SimpleNamespace(connected=_state["online"], trade_allowed=False, company="RoboForex Ltd", build=5120)
 
 
 def symbols_get(group=None):
@@ -53,7 +57,7 @@ def symbol_select(name, enable):
 
 
 def symbol_info_tick(name):
-    return SimpleNamespace(time=int(time.time()) + SERVER_OFFSET)
+    return SimpleNamespace(time=int(time.time()) + SERVER_OFFSET - _state["tick_age"])
 
 
 def copy_rates_from_pos(symbol, timeframe, start, count):

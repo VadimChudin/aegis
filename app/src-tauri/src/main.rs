@@ -38,8 +38,9 @@ struct AppState {
     settings: Mutex<SettingsStore>,
     /// Every connected broker. Binance, Bybit and RoboForex can be open together.
     sessions: Mutex<HashMap<BrokerId, Session>>,
-    /// Serialises connect/disconnect per app so two clicks cannot race.
-    connecting: Mutex<()>,
+    /// Serialises connect/disconnect per broker so two clicks cannot race, while a slow
+    /// MT5 login (up to a minute) does not hold up Binance or Bybit.
+    connecting: [Mutex<()>; 3],
     feed: std::sync::Mutex<Option<(BrokerId, JoinHandle<()>)>>,
     /// Bumped on every chart load; the window drops events from older feeds.
     generation: AtomicU64,
@@ -76,6 +77,11 @@ impl AppState {
         }
     }
 
+    fn connect_lock(&self, broker: BrokerId) -> &Mutex<()> {
+        let i = BrokerId::ALL.iter().position(|b| *b == broker).unwrap_or(0);
+        &self.connecting[i]
+    }
+
     async fn summaries(&self) -> Vec<AccountSummary> {
         let mut list: Vec<_> = self.sessions.lock().await.values().map(|s| s.summary.clone()).collect();
         list.sort_by_key(|s| s.broker);
@@ -90,7 +96,7 @@ impl AppState {
 
     /// Opens a session from credentials, replacing this broker's previous one.
     async fn open(&self, broker: BrokerId, fields: BTreeMap<String, String>) -> ConnectReport {
-        let _guard = self.connecting.lock().await;
+        let _guard = self.connect_lock(broker).lock().await;
         let report = match Credentials::from_fields(broker, &fields) {
             Err(e) => ConnectReport::input_error(broker, &e),
             Ok(credentials) => {
@@ -139,6 +145,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn feed_backfills_bars_missed_during_an_outage() {
+        let now = 1_790_000_000;
+        assert_eq!(feed_limit(Timeframe::M1, now - 30, now), 2);
+        assert_eq!(feed_limit(Timeframe::M1, now - 600, now), 12);
+        assert_eq!(feed_limit(Timeframe::M15, now - 3 * 3600, now), 14);
+        assert_eq!(feed_limit(Timeframe::M1, now - 30 * 86_400, now), HISTORY_BARS);
+        assert_eq!(feed_limit(Timeframe::H1, 0, now), 2);
+        assert_eq!(feed_limit(Timeframe::H1, now + 50, now), 2);
+    }
+
     #[tokio::test]
     async fn failed_reconnect_keeps_existing_session_and_feed() {
         let port = 18768;
@@ -156,7 +173,7 @@ mod tests {
         let state = AppState {
             settings: Mutex::new(SettingsStore::open(&path)),
             sessions: Mutex::new(HashMap::new()),
-            connecting: Mutex::new(()),
+            connecting: Default::default(),
             feed: std::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
             options: ConnectOptions {
@@ -310,7 +327,7 @@ async fn broker_disconnect(
     broker: BrokerId,
     forget: bool,
 ) -> Result<PublicSettings, String> {
-    let _guard = state.connecting.lock().await;
+    let _guard = state.connect_lock(broker).lock().await;
     state.close(broker).await;
     let mut settings = state.settings.lock().await;
     if forget {
@@ -374,7 +391,8 @@ async fn load_chart(
     if state.generation.load(Ordering::SeqCst) != generation {
         return Err("superseded".into());
     }
-    let feed = async_runtime::spawn(run_feed(app, connector.clone(), timeframe, generation));
+    let last = candles.last().map_or(0, |c| c.time);
+    let feed = async_runtime::spawn(run_feed(app, connector.clone(), timeframe, generation, last));
     if let Some((_, old)) = state
         .feed
         .lock()
@@ -398,15 +416,39 @@ async fn stop_chart(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Polls the last two bars so the closing bar gets its final values too.
-async fn run_feed(app: AppHandle, connector: Arc<Connector>, timeframe: Timeframe, generation: u64) {
+/// Bars to poll so nothing is skipped: normally the last two (the closing bar gets its
+/// final values too), after an outage, a sleep of the computer or a slow venue every bar
+/// since the last one received, so the chart and live strategies never see a hole.
+fn feed_limit(timeframe: Timeframe, last_bar: i64, now: i64) -> usize {
+    if last_bar <= 0 {
+        return 2;
+    }
+    let missed = (now - last_bar).max(0) / timeframe.seconds();
+    usize::try_from(missed)
+        .unwrap_or(usize::MAX)
+        .saturating_add(2)
+        .min(HISTORY_BARS)
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+async fn run_feed(app: AppHandle, connector: Arc<Connector>, timeframe: Timeframe, generation: u64, last: i64) {
     let mut delay = POLL;
     let mut failing = false;
+    let mut last_bar = last;
     loop {
         tokio::time::sleep(delay).await;
-        match connector.candles(timeframe, 2).await {
+        match connector
+            .candles(timeframe, feed_limit(timeframe, last_bar, unix_now()))
+            .await
+        {
             Ok(bars) => {
                 for candle in bars {
+                    last_bar = last_bar.max(candle.time);
                     let _ = app.emit("candle", CandleEvent { generation, candle });
                 }
                 if failing {
@@ -469,7 +511,7 @@ fn setup_state(app: &AppHandle) -> AppState {
     AppState {
         settings: Mutex::new(SettingsStore::open(dir.join("settings.json"))),
         sessions: Mutex::new(HashMap::new()),
-        connecting: Mutex::new(()),
+        connecting: Default::default(),
         feed: std::sync::Mutex::new(None),
         generation: AtomicU64::new(0),
         options,
