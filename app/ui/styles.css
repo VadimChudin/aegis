@@ -2045,8 +2045,14 @@ details.adv[open] > summary {
   vector-effect: non-scaling-stroke;
 }
 
-.st-research { width:100%; border:1px solid #ef4444; background:rgba(239,68,68,.16); color:#ff7272; border-radius:12px; padding:14px; font-weight:700; cursor:pointer; }
+.st-research { border:1px solid #ef4444; background:rgba(239,68,68,.12); color:#ff7272; border-radius:8px; padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer; }
 .st-research:hover { background:rgba(239,68,68,.26); }
+.st-setups { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.st-research-note { margin:8px 0; color:var(--muted); font-size:12px; }
+.st-research-note summary { cursor:pointer; }
+.st-setup-form { margin:10px 0; padding:12px; border:1px solid var(--line); border-radius:10px; }
+.st-setup-form label { display:block; margin-bottom:6px; color:var(--muted); font-size:12px; }
+.st-setup-form .bt-input { width:100%; box-sizing:border-box; }
 .st-dates { display:flex; gap:12px; margin:16px 0; }
 .st-dates label { display:flex; flex-direction:column; gap:6px; color:var(--muted); min-width:0; }
 .st-dates input { background:var(--surface); color:var(--text); padding:8px; border:1px solid var(--line); border-radius:8px; }

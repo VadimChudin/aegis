@@ -4,6 +4,12 @@ An independent Strategies panel, like Bounce, with 31 controls, persistent setti
 presets. No live orders, GA, or automatic claim of profitability. The existing density screener
 and Bounce remain separate and unchanged.
 
+The historical preset is a compact red button. Its limitations are available under the neutral,
+collapsed “About this setup” disclosure rather than an orange text block. “Add my setup” opens
+a named form that saves a snapshot of all current strategy parameters, not dates/results.
+Names must be unique; existing setups are never silently overwritten. Saved setups can be
+applied with one click and persist across restarts.
+
 ## Red preset: Setup 1 + · +0.85R / 5 trades
 
 This is a **retrospective exploratory diagnostic**, April–September 2026, not a validated edge.

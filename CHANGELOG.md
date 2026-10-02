@@ -2,6 +2,7 @@
 
 ## 0.6.1 — 2026-10-01
 
+- Compact red setup button and an explicit “Add my setup” form with unique names and persistent parameter snapshots; the orange research paragraph is replaced by a collapsed neutral disclosure.
 - **Experimental structural reversal:** a separate strategy panel with 31 sliders/toggles, saved parameters and custom presets, inclusive date selection and cached native Bybit trade-archive loading (up to 184 complete days). Prior-day raid → reclaim → structure confirmation, market or limit-retest entry, stops, time exits, original mapped targets, cost and remaining reward/risk gates.
 - **Red “Setup 1 + · +0.85R / 5 trades” preset:** reproduces the retrospective April–September 2026 diagnostic. Clearly labelled exploratory, with cost filter off; not a proven edge. Current backtest results, stale-settings warning, R equity, monthly results, latest trades and rejection counts are separate from the historical badge. No live orders, FIFO, funding or liquidation claims.
 - Keeps the v0.6.0 density screener. Rules and assumptions: `docs/structural-reversal.md`.

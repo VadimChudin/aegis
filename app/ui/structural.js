@@ -7,7 +7,7 @@
   const text = (en, ru, kk) => window.I18N.lang === "ru" ? ru : window.I18N.lang === "kk" ? kk : en;
   const t = (s) => window.I18N.t(s);
   const clone = (x) => JSON.parse(JSON.stringify(x));
-  const B = { info: null, p: null, result: null, busy: false, stale: false, progress: "", error: "", from: "2026-04-01", to: "2026-09-30" };
+  const B = { info: null, p: null, result: null, busy: false, saving: false, editingSetup: false, setupName: "", setupError: "", stale: false, progress: "", error: "", from: "2026-04-01", to: "2026-09-30" };
   let saveTimer;
   function save() {
     clearTimeout(saveTimer);
@@ -53,22 +53,41 @@
     const groups = [...new Set(B.info.specs.map(s=>s.group))];
     const presets = Object.keys(B.info.presets || {}).map(k=>`<button type="button" class="ghost sm" data-preset="${esc(k)}">${esc(k)}</button>`).join("");
     body.innerHTML = `<div class="bt-cols"><div class="bt-col" id="stSettings">
-      <button type="button" class="st-research" id="stResearch">${esc(text("Setup 1 +", "Сетап 1 +", "Сетап 1 +"))} · +0.85R / 5 ${esc(t("Trades"))}</button>
-      <p class="hint warn">${esc(text("Retrospective exploratory result, Apr–Sep 2026. Cost filter OFF. Five trades do not prove profitability. This badge never changes with your sliders.", "Ретроспективная диагностика, апрель–сентябрь 2026. Фильтр издержек ВЫКЛЮЧЕН. Пять сделок не доказывают прибыльность. Эта подпись не меняется от ползунков.", "Ретроспективті тәжірибе, 5 мәміле кірістілікті дәлелдемейді. Шығын сүзгісі өшірулі."))}</p>
-      <div class="bt-presets">${presets}</div><div class="bt-presets"><input class="bt-input" id="stPresetName" maxlength="40" placeholder="${esc(t("Preset name"))}"><button type="button" class="ghost sm" id="stSavePreset">${esc(t("Save preset"))}</button></div>
+      <div class="st-setups"><button type="button" class="st-research" id="stResearch">${esc(text("Setup 1 +", "Сетап 1 +", "Сетап 1 +"))} · +0.85R / 5 ${esc(t("Trades"))}</button>
+      <button type="button" class="ghost sm" id="stAddSetup" ${B.busy || B.saving ? "disabled" : ""}>+ ${esc(text("Add my setup", "Добавить свой сетап", "Өз сетапымды қосу"))}</button></div>
+      <details class="st-research-note"><summary>${esc(text("About this setup", "О сетапе", "Сетап туралы"))}</summary><p class="hint">${esc(text("Retrospective exploratory result, Apr–Sep 2026. Cost filter OFF. Five trades do not prove profitability. This badge never changes with your sliders.", "Ретроспективная диагностика, апрель–сентябрь 2026. Фильтр издержек ВЫКЛЮЧЕН. Пять сделок не доказывают прибыльность. Эта подпись не меняется от ползунков.", "Ретроспективті тәжірибе, 5 мәміле кірістілікті дәлелдемейді. Шығын сүзгісі өшірулі."))}</p></details>
+      <div class="bt-presets">${presets}</div>
+      ${B.editingSetup ? `<form id="stSetupForm" class="st-setup-form"><label for="stPresetName">${esc(text("Setup name", "Название сетапа", "Сетап атауы"))}</label><input class="bt-input" id="stPresetName" maxlength="40" required value="${esc(B.setupName)}" ${B.saving ? "disabled" : ""}>
+      <p class="hint">${esc(text("Saves all current strategy parameters; dates and results are not saved.", "Сохраняет все текущие параметры стратегии; даты и результаты не сохраняются.", "Стратегия параметрлерін сақтайды; күндер мен нәтижелер сақталмайды."))}</p>
+      <div class="bt-presets"><button type="submit" class="ghost sm" id="stSavePreset" ${B.busy || B.saving ? "disabled" : ""}>${esc(B.saving ? text("Saving…","Сохранение…","Сақталуда…") : text("Save","Сохранить","Сақтау"))}</button><button type="button" class="ghost sm" id="stCancelSetup" ${B.saving ? "disabled" : ""}>${esc(text("Cancel","Отмена","Болдырмау"))}</button></div><p class="hint" role="alert" id="stSetupError">${esc(B.setupError)}</p></form>` : ""}
       <div class="st-dates"><label>${esc(t("From"))}<input id="stFrom" type="date" min="2026-03-09" value="${B.from}" ${B.busy ? "disabled" : ""}></label><label>${esc(t("To"))}<input id="stTo" type="date" min="2026-03-09" value="${B.to}" ${B.busy ? "disabled" : ""}></label></div>
       <p class="hint">${esc(text("Levels: previous UTC day. First selected day is warmup only; trading starts the following day. Confirmation: completed 1m bars, New York hours. Up to 184 complete data days.", "Уровни: предыдущий UTC-день. Первый выбранный день — только прогрев уровней; сделки начинаются со следующего. Подтверждение: закрытые 1m-свечи, часы Нью-Йорка. До 184 дней данных.", "Деңгей: алдыңғы UTC күні. Бірінші күн — дайындық; мәмілелер келесі күннен басталады. Жабылған 1m шамдар, Нью-Йорк уақыты. 184 күнге дейін."))}</p>
       ${groups.map(g=>`<details class="bt-group" open><summary>${esc(t(g))}</summary>${B.info.specs.filter(s=>s.group===g).map(control).join("")}</details>`).join("")}
       </div><div class="bt-col" id="stResults">${results()}</div></div>`;
     body.querySelectorAll("[data-param]").forEach(el=>{el.oninput=()=>{B.p.values[el.dataset.param]=el.type==="checkbox" ? +el.checked : +el.value;if(el.nextElementSibling?.tagName==="OUTPUT")el.nextElementSibling.textContent=n(+el.value,2);changed();};});
-    $("stResearch").disabled=B.busy;$("stResearch").onclick=()=>{B.p=clone(B.info.defaults);changed();render();};
-    body.querySelectorAll("[data-preset]").forEach(el=>{el.disabled=B.busy;el.onclick=()=>{B.p=clone(B.info.presets[el.dataset.preset]);changed();render();};});
-    $("stSavePreset").disabled=B.busy;$("stSavePreset").onclick=async()=>{const name=$("stPresetName").value.trim();if(!name)return;try{await invoke("structural_save",{params:B.p,name});(B.info.presets ||= {})[name]=clone(B.p);render();}catch(e){log(String(e),"bad");}};
+    $("stResearch").disabled=B.busy || B.saving;$("stResearch").onclick=()=>{B.p=clone(B.info.defaults);changed();render();};
+    body.querySelectorAll("[data-preset]").forEach(el=>{el.disabled=B.busy || B.saving;el.onclick=()=>{B.p=clone(B.info.presets[el.dataset.preset]);changed();render();};});
+    $("stAddSetup").onclick=()=>{B.editingSetup=true;B.setupError="";render();$("stPresetName").focus();};
+    if ($("stSetupForm")) {
+      $("stPresetName").oninput=()=>{B.setupName=$("stPresetName").value;};
+      $("stCancelSetup").onclick=()=>{B.editingSetup=false;B.setupName="";B.setupError="";render();};
+      $("stSetupForm").onsubmit=async(e)=>{
+        e.preventDefault();if(B.busy || B.saving)return;
+        const name=B.setupName.trim();
+        if(!name || Object.hasOwn(B.info.presets || {},name)) {
+          B.setupError=text("Enter a new, unique setup name.","Введите новое уникальное название сетапа.","Жаңа бірегей сетап атауын енгізіңіз.");$("stSetupError").textContent=B.setupError;$("stPresetName").focus();return;
+        }
+        clearTimeout(saveTimer);const params=clone(B.p);B.saving=true;B.setupError="";render();
+        try{await invoke("structural_save",{params,name});(B.info.presets ||= {})[name]=params;B.editingSetup=false;B.setupName="";}
+        catch(error){B.setupError=String(error);log(B.setupError,"bad");}
+        B.saving=false;if(S.panel==="structural")render();
+      };
+    }
     for(const [id,key] of [["stFrom","from"],["stTo","to"]])$(id).onchange=()=>{B[key]=$(id).value;B.stale=true;render();};
     $("stRun").onclick=run;
   }
   async function run() {
-    if(B.busy)return;clearTimeout(saveTimer);B.busy=true;B.error="";B.progress=t("Loading…");render();
+    if(B.busy || B.saving)return;clearTimeout(saveTimer);B.busy=true;B.error="";B.progress=t("Loading…");render();
     const params=clone(B.p);
     try{await invoke("structural_save",{params,name:null});B.result=await invoke("structural_backtest",{params,from:B.from,to:B.to});B.stale=false;}
     catch(e){B.error=String(e);log(B.error,"bad");}
