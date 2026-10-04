@@ -35,6 +35,10 @@ on Ubuntu 24.04; compatibility with older distributions is not verified.
   application, mock auto-connect restored the chart and the saved 5m timeframe.
 - The density window displayed sampled mock-book densities. These are synthetic
   test data, not an observation of a real exchange or trading results.
+- After publication, downloaded the `.deb` from the v0.6.1 GitHub release,
+  verified byte-for-byte equality with the built package, reinstalled it with
+  apt, and launched the installed executable again. Mock auto-connect, the
+  chart and saved 5m timeframe were visible in the fresh desktop screenshot.
 
 No real orders were submitted, no broker credentials were used, and no cloud
 model API key was sent. Saving a custom preset through desktop automation was
