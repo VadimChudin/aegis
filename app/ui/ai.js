@@ -133,7 +133,12 @@
     const progress = Math.max(0, Math.min(100, Number(setup.progress) || 0));
     const statusLabel = s.message || (running ? "Paper запущен" : "Paper остановлен");
     const positions = Array.isArray(p.positions) ? p.positions : [];
-    const positionsHtml = positions.length ? `<div class="ai-table-wrap"><table class="ai-table"><thead><tr><th>ID</th><th>Сторона</th><th>Количество</th><th>Вход</th><th>Текущая цена</th><th>Стоп</th></tr></thead><tbody>${positions.map(x => `<tr><td>${esc(x.id ?? "—")}</td><td>${esc(x.side ?? "—")}</td><td>${esc(val(x.quantity, 8))}</td><td>${esc(val(x.entry_price, 8))}</td><td>${esc(val(x.mark_price, 8))}</td><td>${esc(val(x.stop, 8))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="ai-empty">Открытых позиций нет.</p>`;
+    const selectedBroker = $(root, "ai-broker")?.value || "";
+    const positionsHtml = positions.length ? `<div class="ai-table-wrap"><table class="ai-table"><thead><tr><th>ID</th><th>Сторона</th><th>Количество</th><th>Вход</th><th>Текущая цена</th><th>Стоп</th><th></th></tr></thead><tbody>${positions.map(x => {
+      const positionBroker = String(x.broker || "").toLowerCase();
+      const closeEnabled = !!selectedBroker && positionBroker === selectedBroker.toLowerCase();
+      return `<tr><td>${esc(x.id ?? "—")}</td><td>${esc(x.side ?? "—")}</td><td>${esc(val(x.quantity, 8))}</td><td>${esc(val(x.entry_price, 8))}</td><td>${esc(val(x.mark_price, 8))}</td><td>${esc(val(x.stop, 8))}</td><td><button type="button" class="ghost sm ai-close-position" data-ai-close data-position-id="${esc(x.id)}" ${closeEnabled ? "" : "disabled"} aria-label="Закрыть Paper-позицию ${esc(x.id)}" data-testid="ai-close-position-${esc(x.id)}">Закрыть</button></td></tr>`;
+    }).join("")}</tbody></table></div>` : `<p class="ai-empty">Открытых позиций нет.</p>`;
     statusEl.innerHTML = `<div class="ai-state-line"><span class="ai-state-dot ${running ? "is-running" : ""}"></span><strong>${esc(running ? "Paper запущен" : "Paper остановлен")}</strong><span class="ai-state-message">${esc(statusLabel)}</span></div>
       <div class="ai-metrics">${metric("Капитал Paper, USD", p.equity == null ? "—" : val(p.equity))}${metric("Реализованный результат, USD", p.realized == null ? "—" : val(p.realized))}${metric("Открытые позиции", positions.length)}${metric("Ключ облака", s.key_stored ? "Сохранён" : "Не задан")}${metric("Учтено/зарезервировано за день, USD", s.costs?.day_spent == null ? "—" : val(s.costs.day_spent, 4))}${metric("Учтено/зарезервировано за месяц, USD", s.costs?.month_spent == null ? "—" : val(s.costs.month_spent, 4))}${metric("Запросы сегодня", s.costs?.requests_today == null ? "—" : val(s.costs.requests_today, 0))}</div>
       <div class="ai-subsection"><h4>Открытые позиции</h4>${positionsHtml}</div><div class="ai-subsection"><h4>Журнал Paper</h4>${journalMarkup(p.journal)}</div>
@@ -250,6 +255,25 @@
     }
   }
   function handleClick(root, event) {
+    const closeButton = event.target.closest("[data-ai-close]");
+    if (closeButton) {
+      const broker = $(root, "ai-broker")?.value;
+      const positionId = Number(closeButton.dataset.positionId);
+      if (!broker || !connectedBrokers().includes(broker) || !Number.isSafeInteger(positionId) || positionId < 0) {
+        showResult(root, "Выберите подключённый брокер этой Paper-позиции для закрытия.", true);
+        return;
+      }
+      closeButton.disabled = true;
+      showResult(root, `Закрытие Paper-позиции ${positionId}…`);
+      invoke("ai_close", { broker, positionId }).then(() => {
+        showResult(root, `Paper-позиция ${positionId} закрыта вручную; выполнявшееся решение отменено.`);
+        refresh(root);
+      }).catch(e => {
+        showResult(root, `Не удалось закрыть Paper-позицию ${positionId}: ${errorText(e)}`, true);
+        refresh(root);
+      });
+      return;
+    }
     const id = event.target.closest("button")?.id;
     if (!id) return;
     if (id === "ai-refresh") { refresh(root); return; }
