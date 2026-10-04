@@ -453,6 +453,10 @@
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.structural.render($("panelBody"));
+    } else if (kind === "ai" && window.AEGIS.ai) {
+      $("panelTitle").textContent = "AI · Paper";
+      $("panel").classList.add("wide");
+      window.AEGIS.ai.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
