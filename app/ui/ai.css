@@ -54,6 +54,7 @@
   background: var(--select-bg); color: var(--ink); font: inherit; outline: none;
 }
 .ai-field input:focus, .ai-field textarea:focus, .ai-broker select:focus { border-color: var(--apple); box-shadow: 0 0 0 2px color-mix(in srgb, var(--apple) 20%, transparent); }
+.ai-field input[readonly] { opacity: .78; cursor: not-allowed; }
 .ai-field textarea { resize: vertical; line-height: 1.45; }
 .ai-actions, .ai-test-actions { gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .ai-actions button, .ai-test-actions button, .ai-setup-row button, .ai-key-row button { min-height: 36px; }
