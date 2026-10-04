@@ -43,8 +43,9 @@ the cloud is instructed not to recursively consult.
 For each cloud call AEGIS fetches model pricing and reserves a conservative cost
 for the bounded 65,536-byte request and 1,024-token output. Daily/monthly UTC
 budgets and request counts persist across restarts. Failure or missing actual
-usage keeps the reservation charged rather than retrying for free. Actual cost
-within the reservation can reduce the charged amount. The display therefore
+usage keeps the reservation charged rather than retrying for free. Reported actual
+cost replaces the reservation, including an unexpectedly higher bill; further
+requests are then blocked if the budget is exceeded. The display therefore
 shows **accounted cost/reservation**, not a precise billing statement. Provider
 pricing can change; provider-side account spending limits are recommended too.
 

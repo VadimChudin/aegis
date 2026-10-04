@@ -61,6 +61,7 @@ def runtime_environment(root):
         "OLLAMA_MODELS": str(root / "models"),
         "OLLAMA_HOST": HOST,
         "OLLAMA_NO_CLOUD": "1",
+        "OLLAMA_CONTEXT_LENGTH": "8192",
     }
 
 

@@ -150,7 +150,7 @@
     const step = $(root, "ai-step");
     const statusHasError = /error|ошиб|поврежд|некорректн|заблокирован/i.test(s.message || "");
     if (start) start.disabled = running || busy || !hasBroker || statusHasError || !!B.error;
-    if (stop) stop.disabled = !running;
+    if (stop) stop.disabled = !running && !busy;
     if (step) step.disabled = running || busy || !hasBroker;
     const setupButton = $(root, "ai-setup");
     const setupBusy = ["checking_runtime", "downloading_runtime", "starting_runtime", "preparing_model", "downloading_model"].includes(setup.status);

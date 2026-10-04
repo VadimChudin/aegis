@@ -336,7 +336,9 @@ async fn cancelable_request(
         result=ai::request_decision(settings,snapshot,paper,key,cloud)=>result,
         _=async {loop {tokio::time::sleep(Duration::from_millis(100)).await;
             if state.ai.epoch.load(Ordering::SeqCst)!=epoch {break;}
-        }}=>Err("Запрос отменён остановкой Auto; уже принятый провайдером запрос может быть оплачен".into()),
+        }}=>Err(if cloud {
+            "Запрос отменён остановкой Auto; уже принятый провайдером запрос может быть оплачен"
+        }else{"Локальный запрос отменён остановкой Auto; облачный API не использовался"}.into()),
     }
 }
 
@@ -398,7 +400,7 @@ async fn step_inner(state: &AppState, broker: BrokerId, cloud_only: bool, epoch:
         };
         // Keep the reservation charged on failures/missing usage: no unbounded retries.
         let (decision, cost) = cancelable_request(state, epoch, &s, &snap, &paper, Some(&key), true).await?;
-        if let Some(cost) = cost.filter(|c| c.is_finite() && *c >= 0.0 && *c <= reserve) {
+        if let Some(cost) = cost.filter(|c| c.is_finite() && *c >= 0.0) {
             let mut r = state.ai.inner.lock().await;
             if r.costs.day == reserve_day {
                 r.costs.day_spent -= reserve - cost;
@@ -570,13 +572,31 @@ async fn ensure_server(state: &AppState) -> Result<(), String> {
         .env("OLLAMA_HOST", "127.0.0.1:11434")
         .env("OLLAMA_MODELS", root.join("models"))
         .env("OLLAMA_NO_CLOUD", "1")
+        .env("OLLAMA_CONTEXT_LENGTH", "8192")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "Не удалось запустить Ollama")?;
     r.server = Some(child);
-    Ok(())
+    drop(r);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "HTTP client failed")?;
+    for _ in 0..20 {
+        if client
+            .get("http://127.0.0.1:11434/api/version")
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Err("Локальный runtime ещё не готов; повторите проверку подключения".into())
 }
 
 #[tauri::command]
@@ -641,12 +661,17 @@ pub async fn run(app: AppHandle) {
             continue;
         };
         let s = settings(&state).await;
-        if let Ok(snap) = snapshot(&state, broker, false).await {
-            let mut r = state.ai.inner.lock().await;
-            if let Err(e) = r.paper.mark(&snap, &s) {
-                r.message = e;
+        match snapshot(&state, broker, false).await {
+            Ok(snap) => {
+                let mut r = state.ai.inner.lock().await;
+                if let Err(e) = r.paper.mark(&snap, &s) {
+                    r.message = e;
+                }
+                let _ = state.ai.save(&r);
             }
-            let _ = state.ai.save(&r);
+            Err(error) => {
+                state.ai.inner.lock().await.message = format!("Защита Paper ждёт свежую котировку: {error}");
+            }
         }
         if running && !state.ai.busy.load(Ordering::SeqCst) && now().saturating_sub(last) >= s.interval_seconds {
             let app = app.clone();
@@ -681,5 +706,39 @@ mod tests {
         assert!(c.reserve(0.3, &s).is_err());
         assert!(c.reserve(f64::NAN, &s).is_err());
         assert_eq!(month_id(0), 1970 * 12 + 1);
+    }
+
+    #[tokio::test]
+    async fn corrupted_paper_blocks_overwrite_and_decisions() {
+        let path = std::env::temp_dir().join(format!("aegis-corrupt-ai-{}.json", std::process::id()));
+        std::fs::write(&path, b"not-json").unwrap();
+        let state = AiState::new(path.clone());
+        assert!(state.recovery_error.is_some());
+        let runtime = state.inner.lock().await;
+        assert!(state.save(&runtime).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not-json");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn paper_and_budget_survive_restart_but_auto_does_not() {
+        let root = std::env::temp_dir().join(format!("aegis-ai-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ai-paper.json");
+        let first = AiState::new(path.clone());
+        {
+            let mut r = first.inner.lock().await;
+            r.costs.reserve(0.5, &AiSettings::default()).unwrap();
+            r.running = true;
+            r.broker = Some(BrokerId::Binance);
+            first.save(&r).unwrap();
+        }
+        let second = AiState::new(path);
+        let r = second.inner.lock().await;
+        assert!(!r.running);
+        assert_eq!(r.costs.day_spent, 0.5);
+        assert_eq!(r.broker, Some(BrokerId::Binance));
+        assert_eq!(r.paper.state().equity, 10_000.0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -883,14 +883,17 @@ fn request_body(
         "daily_loss_limit": settings.daily_loss_limit,
     });
     let user = serde_json::json!({ "snapshot": snapshot, "paper_state": state, "risk_limits": risk_limits });
-    let bytes = serde_json::to_vec(&serde_json::json!({
+    let mut payload = serde_json::json!({
         "model": model,
         "messages": [{"role":"system","content":system},{"role":"user","content":user.to_string()}],
         "temperature": 0,
         "max_tokens": 1024,
         "response_format": {"type":"json_object"}
-    }))
-    .map_err(|_| "failed to encode AI request".to_string())?;
+    });
+    if local {
+        payload["reasoning_effort"] = "none".into();
+    }
+    let bytes = serde_json::to_vec(&payload).map_err(|_| "failed to encode AI request".to_string())?;
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err("AI request exceeds the 65536-byte limit".into());
     }
