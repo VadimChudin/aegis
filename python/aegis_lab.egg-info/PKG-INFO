@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: aegis-lab
+Version: 0.1.0
+Summary: AEGIS Python side: MetaTrader 5 bridge now, research, backtests and GA later
+Requires-Python: >=3.9
+Provides-Extra: mt5
+Requires-Dist: MetaTrader5>=5.0.45; platform_system == "Windows" and extra == "mt5"
+Provides-Extra: research
+Requires-Dist: numpy; extra == "research"
+Requires-Dist: pandas; extra == "research"
+Requires-Dist: orjson; extra == "research"
+Requires-Dist: numba; extra == "research"
+Requires-Dist: pyarrow; extra == "research"
+Requires-Dist: tabulate; extra == "research"

@@ -1,0 +1,13 @@
+
+[mt5]
+
+[mt5:platform_system == "Windows"]
+MetaTrader5>=5.0.45
+
+[research]
+numpy
+pandas
+orjson
+numba
+pyarrow
+tabulate

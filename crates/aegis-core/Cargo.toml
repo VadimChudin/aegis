@@ -21,3 +21,4 @@ aes-gcm = "0.10"
 whoami = "1"
 rayon = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+lzma-rs = "0.3"

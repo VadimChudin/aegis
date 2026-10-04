@@ -80,6 +80,13 @@ stub!(
     Backtest
 );
 stub!(
+    AsiaFomc,
+    "asia_fomc",
+    "Asia + FOMC",
+    "Long through the Asian session and into scheduled FOMC statements, on the local Dukascopy history. Backtest and auto search only (no live orders yet).",
+    Backtest
+);
+stub!(
     LiquiditySweep,
     "liquidity_sweep",
     "Liquidity Sweep",
@@ -96,6 +103,7 @@ pub fn registry() -> Vec<Box<dyn Strategy>> {
     vec![
         Box::new(Breakout),
         Box::new(Bounce),
+        Box::new(AsiaFomc),
         Box::new(LiquiditySweep),
         Box::new(Data),
     ]
@@ -110,14 +118,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn four_slots_with_unique_ids() {
+    fn five_slots_with_unique_ids() {
         let names: Vec<_> = catalog().iter().map(|s| s.name).collect();
-        assert_eq!(names, ["Breakout", "Bounce", "Liquidity Sweep", "DATA"]);
+        assert_eq!(names, ["Breakout", "Bounce", "Asia + FOMC", "Liquidity Sweep", "DATA"]);
         let mut ids: Vec<_> = catalog().iter().map(|s| s.id).collect();
+        ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         for s in catalog() {
-            let want = if s.id == "bounce" {
+            let want = if s.id == "bounce" || s.id == "asia_fomc" {
                 StrategyStatus::Backtest
             } else {
                 StrategyStatus::Stub

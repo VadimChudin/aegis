@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod asia_cmd;
 mod bounce_cmd;
+mod history_cmd;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -45,6 +47,8 @@ struct AppState {
     generation: AtomicU64,
     options: ConnectOptions,
     bounce: bounce_cmd::BounceState,
+    history: history_cmd::HistoryState,
+    asia: asia_cmd::AsiaState,
     cache_dir: PathBuf,
     /// Public futures API for the latest klines (no key needed).
     binance_public: String,
@@ -165,6 +169,8 @@ mod tests {
                 ..Default::default()
             },
             bounce: bounce_cmd::BounceState::default(),
+            history: history_cmd::HistoryState::default(),
+            asia: asia_cmd::AsiaState::default(),
             cache_dir: std::env::temp_dir(),
             binance_public: String::new(),
         };
@@ -474,6 +480,8 @@ fn setup_state(app: &AppHandle) -> AppState {
         generation: AtomicU64::new(0),
         options,
         bounce: bounce_cmd::BounceState::default(),
+            history: history_cmd::HistoryState::default(),
+            asia: asia_cmd::AsiaState::default(),
         cache_dir,
         binance_public,
     }
@@ -504,6 +512,15 @@ fn main() {
             bounce_cmd::bounce_validate,
             bounce_cmd::bounce_optimize,
             bounce_cmd::bounce_preset_save,
+            history_cmd::history_info,
+            history_cmd::history_plan,
+            history_cmd::history_sync,
+            history_cmd::history_cancel,
+            asia_cmd::asia_info,
+            asia_cmd::asia_save,
+            asia_cmd::asia_backtest,
+            asia_cmd::asia_search,
+            asia_cmd::asia_cancel,
             set_lang
         ])
         .build(tauri::generate_context!())

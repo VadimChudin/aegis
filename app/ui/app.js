@@ -437,6 +437,14 @@
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.bounce.render($("panelBody"));
+    } else if (window.AEGIS.panels[kind]) {
+      // Panels registered by other scripts (history.js, asiafomc.js).
+      const p = window.AEGIS.panels[kind];
+      $("panelTitle").textContent = t(p.title);
+      $("panel").classList.add("wide");
+      $("panel").classList.toggle("strategy", !!p.strategy);
+      document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
+      p.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
@@ -613,8 +621,11 @@
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
+    const extra = window.AEGIS.panels[S.panel];
+    if (extra) extra.render($("panelBody"));
     const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
+    if (extra) $("panelTitle").textContent = t(extra.title);
   }
 
   // ---- live feed ----------------------------------------------------------------
@@ -653,6 +664,8 @@
     setLamp,
     closePanel,
     renderChartChrome,
+    /** kind → { title, render(body), strategy } for panels defined in other scripts. */
+    panels: {},
     reloadLive: () => (S.chart.broker ? loadChart(S.chart.broker) : (clearChart(), setLamp("off", t("Offline")), renderChartChrome())),
   };
 
