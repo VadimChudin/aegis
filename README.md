@@ -71,6 +71,15 @@ AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit AEGIS_CONFIG_DIR=/tmp/aegis-dev carg
 
 ## Release
 
+Linux x86-64 packages are built on Ubuntu 24.04 as `.deb` files. Install with
+`sudo apt install ./AEGIS_0.6.1_amd64.deb` (use the filename of your download),
+then launch `aegis`. A graphical desktop and WebKitGTK 4.1 are required; apt
+resolves the declared runtime dependencies. Older distributions are not verified.
+RoboForex's official MetaTrader5 Python integration remains Windows-only; the
+Linux package does not make real MT5 connectivity available on Linux.
+
+Linux package verification and limitations: [Linux release checks](docs/linux-release.md).
+
 Bump the version in `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/package.json`, add a `CHANGELOG` entry, then push a tag:
 
 ```bash
