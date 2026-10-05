@@ -436,6 +436,7 @@ async fn step_inner(state: &AppState, broker: BrokerId, cloud_only: bool, epoch:
         return Err(error);
     }
     r.message = "Paper-решение обработано; реальные ордера не отправляются".into();
+    r.setup = json!({"status":"ready","progress":100});
     state.ai.save(&r)
 }
 

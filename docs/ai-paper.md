@@ -109,3 +109,11 @@ evidence for the user's GPU or real trading evidence.
 Run a local synthetic check with `cargo run --release -p aegis-core --example
 ai_paper` after Ollama is ready. It does not connect to any broker or use a key.
 Native UI/installer verification is recorded in the release notes when completed.
+
+The installed Linux beta was also exercised end-to-end with the actual local
+Qwen model and a repository mock exchange: a wait decision passed fresh-quote
+revalidation and was persisted in the Paper journal, with zero cloud spend.
+Native model setup showed ready/100%; stopping an in-flight local request
+prevented application of its result. A global **Стоп AI** button remains visible
+when the AI panel is closed. These are functional checks, not trading-performance
+or real-account evidence. Local tests: 95 Rust tests and 25 Python tests passed.

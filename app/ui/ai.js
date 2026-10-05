@@ -3,6 +3,11 @@
   const A = window.AEGIS;
   if (!A) return;
   const { invoke, esc, S } = A;
+  const stopButton=document.getElementById("btnAiStop");
+  if(stopButton) stopButton.onclick=async()=>{
+    try{await invoke("ai_stop");A.log("AI Paper остановлен", "ok");}
+    catch(error){A.log(`Не удалось остановить AI: ${String(error)}`,"bad");}
+  };
   const fields = [
     { id: "local_url", label: "Адрес локальной модели", type: "url", placeholder: "http://127.0.0.1:11434" },
     { id: "local_model", label: "Локальная модель", placeholder: "qwen3:8b" },
@@ -116,7 +121,9 @@
     const recent = rows.slice(-100).reverse();
     return `<div class="ai-table-wrap"><table class="ai-table"><thead><tr><th>Время</th><th>Событие</th><th>Результат / причина</th></tr></thead><tbody>${recent.map(row => {
       const item = row && typeof row === "object" ? row : { message: row };
-      const time = item.time ?? item.timestamp ?? item.created_at ?? "—";
+      const rawTime = item.time ?? item.timestamp ?? item.created_at;
+      const time = Number.isFinite(rawTime) && rawTime>0 && rawTime<8e12
+        ? new Date(rawTime*1000).toLocaleString() : "—";
       const event = item.action ?? item.event ?? item.status ?? item.side ?? "Запись журнала";
       const detail = item.reason ?? item.message ?? item.result ?? item.realized ?? item.pnl ?? item.profit ?? stringify(item);
       return `<tr><td>${esc(time)}</td><td>${esc(event)}</td><td class="ai-reason">${esc(typeof detail === "object" ? stringify(detail) : detail)}</td></tr>`;
