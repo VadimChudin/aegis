@@ -28,6 +28,56 @@ Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart fr
 
 MT5 has no network API, so AEGIS starts a small Python process (`python/aegis_lab/bridges/mt5_bridge.py`) that talks to the local terminal. MT5 bars carry the broker's server time; the bridge converts them to UTC.
 
+## Local AI
+
+Rail → **Local AI** installs a private Ollama runtime and **Qwen3 8B Q4_K_M** (`qwen3:8b`).
+Confirm the download, then press **Install locally**. AEGIS downloads the official Ollama
+v0.35.1 archive over HTTPS, verifies its published SHA-256 checksum, extracts it, starts a
+loopback-only server at `127.0.0.1:11435`, downloads the model with progress and tests inference.
+Model downloads can be resumed by retrying. Existing model files are reused, including offline.
+No administrator access, Python, cloud account or API key is needed for inference.
+
+- Allow roughly 5.2 GB for model weights, plus several GB for Ollama libraries and temporary
+  extraction space. Installation is offered on Windows x64/ARM64, Linux x64/ARM64 and macOS.
+- The 4096-token context, one parallel request and non-thinking mode target a computer with
+  8 GB VRAM and 16 GB RAM. They are defaults, not a guarantee of GPU compatibility or speed.
+  The panel reports loaded CPU/GPU memory. Existing GPU drivers are required; AEGIS does not
+  install drivers or promise a once-per-second inference cycle. Linux AMD ROCm-specific
+  packages are not installed automatically by this first version.
+- **Start server** reloads the model; **Ping model** runs actual inference, not just an HTTP ping.
+  **Stop** and closing AEGIS stop only the server AEGIS started. A separately started server
+  is never killed. Models remain on disk. The server is not automatically started on launch.
+- Files live under the app's config folder, in `local-ai/` (`AEGIS_CONFIG_DIR` also applies):
+  `runtime-v0.35.1/`, `models/`, `server.log` and `experience.json`.
+
+### Learning from experience
+
+Save a confirmed observation and a lesson, tagged with the strategy, optionally with a realised
+result in R. AEGIS retains up to 2000 experiences, retrieves relevant lessons for subsequent
+local questions and persists them across restarts. Each record can be deleted or exported in
+JSONL dataset form. Model answers are **not** automatically accepted as lessons. Do not put API
+keys or customer information into prompts or experience records.
+
+This is **retrieval-based experiential memory**, not LoRA training or a change to Qwen's weights.
+Dataset export does not train a model. Continuous weight fine-tuning, market observation,
+OpenRouter consultation and order/position management are not implemented by this step. The
+local question box cannot see current markets or place orders.
+
+Next stages and the future training-data contract are described in
+[`docs/local_ai_roadmap.md`](docs/local_ai_roadmap.md). Stage 2 is an autonomous
+market observer with strategy rules and an automatic decision/outcome journal;
+dataset import and weight fine-tuning are planned, not implemented.
+
+For an explicit runtime smoke test (not part of normal tests):
+
+```bash
+AEGIS_AI_DIR=/path/to/test/local-ai cargo run -p aegis-core --example local_ai -- install
+AEGIS_AI_DIR=/path/to/test/local-ai cargo run -p aegis-core --example local_ai -- ping
+```
+
+Installer references: [Ollama Windows](https://docs.ollama.com/windows),
+[Ollama Linux](https://docs.ollama.com/linux), [model pull API](https://docs.ollama.com/api/pull).
+
 ## Layout
 
 ```

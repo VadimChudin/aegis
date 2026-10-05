@@ -412,6 +412,7 @@
     $("panel").classList.remove("wide", "strategy");
     $("backdrop").hidden = true;
     $("panelBody").replaceChildren();
+    $("panelBody").classList.remove("lai-panel-body");
     document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
     document.body.classList.remove("panel-open");
@@ -422,6 +423,7 @@
     openSheet(false);
     closeMenus();
     S.panel = kind;
+    $("panelBody").classList.remove("lai-panel-body");
     document.body.classList.add("panel-open");
     $("panel").hidden = false;
     $("backdrop").hidden = false;
@@ -437,6 +439,10 @@
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.bounce.render($("panelBody"));
+    } else if (kind === "local_ai" && window.AEGIS.localAI) {
+      $("panelTitle").textContent = t("Local AI");
+      $("panel").classList.add("wide");
+      window.AEGIS.localAI.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
@@ -613,7 +619,8 @@
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
-    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
+    if (S.panel === "local_ai" && window.AEGIS.localAI) window.AEGIS.localAI.render($("panelBody"));
+    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings", local_ai: "Local AI" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
   }
 

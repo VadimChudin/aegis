@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Local AI:** install and extract a checksum-verified official Ollama runtime, download
+  Qwen3 8B with progress, start/stop a loopback-only server and test real local inference.
+  A dedicated panel shows runtime, model and CPU/GPU status without broker credentials.
+- **Experience memory:** save confirmed strategy observations and lessons, retrieve them in
+  local answers, delete individual records and export a JSONL dataset. This is persistent
+  retrieval memory, not model-weight training, live market monitoring or order execution.
+
 ## 0.5.1 — 2026-09-29
 
 - **Fix (Brokers):** the broker form stays usable while a connection check runs: the typed values are kept, only the Connect button shows *Connecting…*, and every label is linked to its field.

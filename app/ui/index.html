@@ -40,6 +40,7 @@
         <aside class="rail glass" id="rail">
           <button class="rail-item on" data-panel="chart" type="button"><span class="ico">⌂</span><span>AEGIS</span></button>
           <button class="rail-item" data-panel="brokers" type="button"><span class="ico">▣</span><span data-i18n>Brokers</span></button>
+          <button class="rail-item" data-panel="local_ai" type="button"><span class="ico">◈</span><span data-i18n>Local AI</span></button>
           <button class="rail-item" data-panel="theme" type="button"><span class="ico">⚙</span><span data-i18n>Settings</span></button>
           <div class="rail-sep"></div>
           <div class="rail-label" data-i18n>Strategies</div>
@@ -81,6 +82,7 @@
     <div class="sheet-backdrop" id="backdrop" hidden></div>
     <aside class="sheet glass" id="sheet" hidden>
       <button class="row" data-open="brokers" type="button"><span data-i18n>Brokers</span><span class="row-ico">▣</span></button>
+      <button class="row" data-open="local_ai" type="button"><span data-i18n>Local AI</span><span class="row-ico">◈</span></button>
       <button class="row" data-open="theme" type="button"><span data-i18n>Settings</span><span class="row-ico">▤</span></button>
       <button class="row danger" id="sheetClose" type="button"><span data-i18n>Close</span><span class="row-ico">✕</span></button>
     </aside>
@@ -98,5 +100,6 @@
     <script src="i18n-dict.js"></script>
     <script src="app.js"></script>
     <script src="bounce.js"></script>
+    <script src="local-ai.js"></script>
   </body>
 </html>

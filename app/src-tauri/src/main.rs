@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bounce_cmd;
+mod local_ai_cmd;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -483,6 +484,14 @@ fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
             let state = setup_state(app.handle());
+            let ai_dir = state
+                .settings
+                .blocking_lock()
+                .path()
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("local-ai");
+            app.manage(local_ai_cmd::LocalAiState::new(ai_dir));
             app.manage(state);
             Ok(())
         })
@@ -504,6 +513,16 @@ fn main() {
             bounce_cmd::bounce_validate,
             bounce_cmd::bounce_optimize,
             bounce_cmd::bounce_preset_save,
+            local_ai_cmd::local_ai_status,
+            local_ai_cmd::local_ai_install,
+            local_ai_cmd::local_ai_start,
+            local_ai_cmd::local_ai_stop,
+            local_ai_cmd::local_ai_ping,
+            local_ai_cmd::local_ai_ask,
+            local_ai_cmd::local_ai_memory_list,
+            local_ai_cmd::local_ai_memory_add,
+            local_ai_cmd::local_ai_memory_delete,
+            local_ai_cmd::local_ai_memory_export,
             set_lang
         ])
         .build(tauri::generate_context!())
@@ -511,6 +530,9 @@ fn main() {
 
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
+            if let Some(state) = handle.try_state::<local_ai_cmd::LocalAiState>() {
+                async_runtime::block_on(state.shutdown());
+            }
             if let Some(state) = handle.try_state::<AppState>() {
                 async_runtime::block_on(state.close_all());
             }
