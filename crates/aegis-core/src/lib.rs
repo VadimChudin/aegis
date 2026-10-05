@@ -2,12 +2,16 @@
 //! The desktop app (`app/src-tauri`) is a thin shell over this crate.
 
 pub mod ai;
+pub mod ai_memory;
 pub mod bounce;
 pub mod broker;
 pub mod checks;
 pub mod density;
+pub mod live_market;
+pub mod local_ai;
 pub mod market;
 pub mod market_depth;
+pub mod observer;
 pub mod settings;
 pub mod strategy;
 pub mod structural;

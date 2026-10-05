@@ -7,6 +7,7 @@ use crate::{
     binance::Binance,
     bybit::Bybit,
     checks::{Check, Checklist},
+    live_market::MarketSample,
     market::{Candle, Timeframe},
     market_depth::OrderBookSnapshot,
     mt5::Mt5Bridge,
@@ -430,6 +431,16 @@ impl Connector {
             Connector::Binance(c) => c.order_book().await,
             Connector::Bybit(c) => c.order_book().await,
             Connector::Roboforex(c) => c.order_book().await,
+        }
+    }
+
+    /// Returns a validated quote and recent ticks from RoboForex MT5 without placing orders.
+    pub async fn market_sample(&self) -> Result<MarketSample, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.market_sample().await,
+            _ => Err(BrokerError::Input(
+                "market snapshots are only supported for RoboForex MT5".into(),
+            )),
         }
     }
 

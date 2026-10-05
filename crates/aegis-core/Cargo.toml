@@ -22,3 +22,6 @@ whoami = "1"
 rayon = "1"
 flate2 = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+zstd = "0.13"
+libc = "0.2"

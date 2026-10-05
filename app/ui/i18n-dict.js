@@ -2,6 +2,10 @@
 // Russian and Kazakh translations, keyed by the English source text (see i18n.js).
 window.I18N_DICT = {
  "ru": {
+  "Local AI": "Локальный ИИ",
+  "AI Observer": "ИИ · RoboForex",
+  "Density bounce": "Отскок от плотности",
+  "SMC / structural reversal": "SMC / структурный разворот",
   "0 = Monday.": "0 = понедельник.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = на дневном экстремуме против сделки (дневной минимум для лонга).",
   "1 when price made a new 12-bar extreme into the level but cumulative delta did not.": "1, если цена обновила 12-барный экстремум у уровня, а кумулятивная дельта — нет.",
@@ -487,6 +491,10 @@ window.I18N_DICT = {
   "Density eaten": "Плотность разобрали"
  },
  "kk": {
+  "Local AI": "Жергілікті ЖИ",
+  "AI Observer": "ЖИ · RoboForex",
+  "Density bounce": "Тығыздықтан серпілу",
+  "SMC / structural reversal": "SMC / құрылымдық бұрылыс",
   "0 = Monday.": "0 = дүйсенбі.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = мәмілеге қарсы күндік экстремумда (лонг үшін күндік минимум).",
   "1 when price made a new 12-bar extreme into the level but cumulative delta did not.": "1, егер баға деңгейге қарай 12 барлық жаңа экстремум жасап, ал жинақталған дельта жасамаса.",
