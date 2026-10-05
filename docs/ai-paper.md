@@ -14,7 +14,8 @@ this feature sends an order to a real broker. Real MT5 still requires Windows.
    for runtime, model and temporary archives; the model alone is about 4.9 GB.
    No sudo, system service or account sign-in is used by the model setup.
 3. Progress is shown in the panel. The installed runtime starts when used; a
-   process owned by AEGIS is stopped when AEGIS exits. An already-running Ollama
+   process group owned by AEGIS is stopped on graceful app exit. Force-killing
+   the app can leave the local runtime running. An already-running Ollama
    on localhost can also be used and is not stopped by AEGIS.
 4. Test the local model, then connect a supported broker and select it as Paper's
    quote source. Linux supports exchange data; an unavailable MT5 DOM/quote is
@@ -116,4 +117,4 @@ revalidation and was persisted in the Paper journal, with zero cloud spend.
 Native model setup showed ready/100%; stopping an in-flight local request
 prevented application of its result. A global **Стоп AI** button remains visible
 when the AI panel is closed. These are functional checks, not trading-performance
-or real-account evidence. Local tests: 95 Rust tests and 25 Python tests passed.
+or real-account evidence. Local tests: 96 Rust tests and 25 Python tests passed.

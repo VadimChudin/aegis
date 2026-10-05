@@ -116,6 +116,11 @@ pub struct AiState {
 }
 impl AiState {
     pub fn new(path: PathBuf) -> Self {
+        let model_cached = path.parent().is_some_and(|p| {
+            p.join("ai-runtime/runtime/bin/ollama").exists()
+                && p.join("ai-runtime/models/manifests/registry.ollama.ai/library/qwen3/8b")
+                    .is_file()
+        });
         let settings = path
             .parent()
             .and_then(|p| std::fs::read(p.join("settings.json")).ok())
@@ -150,7 +155,11 @@ impl AiState {
                 broker,
                 message: "Только Paper. Авто выключено после запуска.".into(),
                 last_request: 0,
-                setup: json!({"status":"Не настроено", "progress":0}),
+                setup: if model_cached {
+                    json!({"status":"ready","progress":100})
+                } else {
+                    json!({"status":"Не настроено", "progress":0})
+                },
                 server: None,
             }),
             busy: AtomicBool::new(false),
@@ -587,7 +596,8 @@ async fn ensure_server(state: &AppState) -> Result<(), String> {
     if !binary.exists() {
         return Ok(());
     }
-    let child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("serve")
         .env("OLLAMA_HOST", "127.0.0.1:11434")
         .env("OLLAMA_MODELS", root.join("models"))
@@ -595,9 +605,13 @@ async fn ensure_server(state: &AppState) -> Result<(), String> {
         .env("OLLAMA_CONTEXT_LENGTH", "8192")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| "Не удалось запустить Ollama")?;
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    let child = command.spawn().map_err(|_| "Не удалось запустить Ollama")?;
     r.server = Some(child);
     drop(r);
     let client = reqwest::Client::builder()
@@ -686,6 +700,8 @@ pub async fn run(app: AppHandle) {
                 let mut r = state.ai.inner.lock().await;
                 if let Err(e) = r.paper.mark(&snap, &s) {
                     r.message = e;
+                } else if r.message.starts_with("Защита Paper ждёт свежую котировку") {
+                    r.message = "Котировки восстановлены; Paper-защита активна".into();
                 }
                 let _ = state.ai.save(&r);
             }
@@ -711,6 +727,18 @@ pub async fn shutdown(state: &AppState) {
     r.running = false;
     let _ = state.ai.save(&r);
     if let Some(child) = r.server.as_mut() {
+        #[cfg(unix)]
+        {
+            if let Some(pid) = child.id() {
+                let _ = Command::new("kill")
+                    .args(["-TERM", "--", &format!("-{pid}")])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+                let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+            }
+        }
         let _ = child.kill().await;
     }
 }

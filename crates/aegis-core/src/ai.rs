@@ -798,6 +798,9 @@ pub async fn request_decision(
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::none());
+    if !cloud {
+        builder = builder.no_proxy();
+    }
     if cloud {
         builder = builder.default_headers({
             let mut headers = header::HeaderMap::new();
