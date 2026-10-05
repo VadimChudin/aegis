@@ -375,7 +375,6 @@ impl PaperEngine {
             || state.initial_equity <= 0.0
             || !state.daily_realized.is_finite()
             || !state.daily_unrealized_baseline.is_finite()
-            || state.positions.len() > settings.max_positions
         {
             return Err("invalid persisted paper state".into());
         }
@@ -387,17 +386,16 @@ impl PaperEngine {
         }
         let mut state = state;
         state.equity = equity_from_marks(&state);
-        if !state.equity.is_finite() || state.equity < 0.0 {
+        if !state.equity.is_finite() {
             return Err("persisted paper equity is invalid".into());
         }
         let aggregate_risk = state.positions.iter().map(current_risk).sum::<f64>();
-        if !aggregate_risk.is_finite() || aggregate_risk > risk_limit(&state, settings) {
-            return Err("persisted positions exceed aggregate risk limit".into());
+        if !aggregate_risk.is_finite() {
+            return Err("persisted aggregate risk is not finite".into());
         }
         let aggregate_notional = position_notional_total(&state, None);
-        let notional_limit = state.equity * settings.max_leverage;
-        if !aggregate_notional.is_finite() || !notional_limit.is_finite() || aggregate_notional > notional_limit {
-            return Err("persisted positions exceed maximum leverage".into());
+        if !aggregate_notional.is_finite() {
+            return Err("persisted aggregate notional is not finite".into());
         }
         let max_id = state.positions.iter().map(|p| p.id).max().unwrap_or(0);
         if max_id == u64::MAX {
@@ -694,9 +692,6 @@ fn current_risk(p: &PaperPosition) -> f64 {
 fn current_risk_total(state: &PaperState) -> f64 {
     state.positions.iter().map(current_risk).sum()
 }
-fn risk_limit(state: &PaperState, settings: &AiSettings) -> f64 {
-    state.equity * settings.max_risk_pct / 100.0
-}
 fn position_notional_total(state: &PaperState, snapshot: Option<&Snapshot>) -> f64 {
     state
         .positions
@@ -987,6 +982,44 @@ mod tests {
             ask: 100.0,
             candles: vec![],
         }
+    }
+
+    #[test]
+    fn restoration_preserves_positions_when_current_limits_are_exceeded() {
+        let settings = AiSettings {
+            initial_equity: 1000.0,
+            max_risk_pct: 1.0,
+            ..Default::default()
+        };
+        let mut engine = PaperEngine::new(&settings);
+        let time = unix_now().unwrap();
+        let mut quote = snapshot(time, 1);
+        quote.bid = 100.0;
+        quote.ask = 100.2;
+        engine
+            .apply(
+                Decision::Open {
+                    snapshot_id: 1,
+                    side: "long".into(),
+                    quantity: 1.0,
+                    stop: 90.2,
+                    reason: "test".into(),
+                },
+                &quote,
+                &settings,
+                time,
+            )
+            .unwrap();
+        quote.bid = 90.21;
+        quote.ask = 90.41;
+        engine.mark(&quote, &settings).unwrap();
+        let lowered = AiSettings {
+            max_leverage: 0.01,
+            ..settings.clone()
+        };
+        let restored = PaperEngine::from_state(engine.state(), &lowered).unwrap();
+        assert_eq!(restored.state().positions.len(), 1);
+        assert!(restored.state().equity < 1000.0);
     }
 
     #[test]

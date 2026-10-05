@@ -20,6 +20,7 @@ use tokio::{
 use crate::AppState;
 
 const SETTINGS: &str = "__ai";
+const CANCELLED_BEFORE_SEND: &str = "Запрос отменён до отправки модели";
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -49,6 +50,15 @@ fn month_id(seconds: u64) -> u64 {
 }
 
 impl Costs {
+    fn refund_unsent(&mut self, day: u64, month: u64, amount: f64) {
+        if self.day == day {
+            self.day_spent = (self.day_spent - amount).max(0.0);
+            self.requests_today = self.requests_today.saturating_sub(1);
+        }
+        if self.month == month {
+            self.month_spent = (self.month_spent - amount).max(0.0);
+        }
+    }
     fn reset_periods(&mut self) {
         let day = now() / 86400;
         let month = month_id(now());
@@ -330,7 +340,7 @@ async fn cancelable_request(
     cloud: bool,
 ) -> Result<(Decision, Option<f64>), String> {
     if state.ai.epoch.load(Ordering::SeqCst) != epoch {
-        return Err("Запрос отменён остановкой Auto".into());
+        return Err(CANCELLED_BEFORE_SEND.into());
     }
     tokio::select! {
         result=ai::request_decision(settings,snapshot,paper,key,cloud)=>result,
@@ -394,12 +404,21 @@ async fn step_inner(state: &AppState, broker: BrokerId, cloud_only: bool, epoch:
         let reserve = cloud_reserve(&s).await?;
         let (reserve_day, reserve_month) = {
             let mut r = state.ai.inner.lock().await;
+            if state.ai.epoch.load(Ordering::SeqCst) != epoch {
+                return Err("Cloud-запрос отменён до отправки; бюджет не списан".into());
+            }
             r.costs.reserve(reserve, &s)?;
             state.ai.save(&r)?;
             (r.costs.day, r.costs.month)
         };
         // Keep the reservation charged on failures/missing usage: no unbounded retries.
-        let (decision, cost) = cancelable_request(state, epoch, &s, &snap, &paper, Some(&key), true).await?;
+        let result = cancelable_request(state, epoch, &s, &snap, &paper, Some(&key), true).await;
+        if result.as_ref().is_err_and(|e| e == CANCELLED_BEFORE_SEND) {
+            let mut r = state.ai.inner.lock().await;
+            r.costs.refund_unsent(reserve_day, reserve_month, reserve);
+            state.ai.save(&r)?;
+        }
+        let (decision, cost) = result?;
         if let Some(cost) = cost.filter(|c| c.is_finite() && *c >= 0.0) {
             let mut r = state.ai.inner.lock().await;
             if r.costs.day == reserve_day {
@@ -707,6 +726,11 @@ mod tests {
         assert!(c.reserve(0.3, &s).is_err());
         assert!(c.reserve(f64::NAN, &s).is_err());
         assert_eq!(month_id(0), 1970 * 12 + 1);
+        let (day, month) = (c.day, c.month);
+        c.refund_unsent(day, month, 0.8);
+        assert_eq!(c.day_spent, 0.0);
+        assert_eq!(c.month_spent, 0.0);
+        assert_eq!(c.requests_today, 0);
     }
 
     #[tokio::test]
