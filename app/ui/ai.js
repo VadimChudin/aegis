@@ -5,7 +5,7 @@
   const { invoke, esc, S } = A;
   const stopButton=document.getElementById("btnAiStop");
   if(stopButton) stopButton.onclick=async()=>{
-    try{await invoke("ai_stop");A.log("AI Paper остановлен", "ok");}
+    try{await Promise.all([invoke("ai_stop"),invoke("observer_stop")]);A.log("AI: новые решения остановлены; текущая симуляция остаётся под защитой", "ok");}
     catch(error){A.log(`Не удалось остановить AI: ${String(error)}`,"bad");}
   };
   const fields = [

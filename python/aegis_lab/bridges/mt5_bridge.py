@@ -12,8 +12,10 @@ exits when stdin closes, so it never outlives the app.
 """
 
 import json
+import math
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 PROTOCOL = 1
 TIMEFRAMES = {
@@ -25,6 +27,7 @@ TIMEFRAMES = {
     "1d": "TIMEFRAME_D1",
 }
 MAX_BARS = 5000
+MAX_TICKS = 256
 
 
 class BridgeError(Exception):
@@ -127,15 +130,8 @@ class Bridge:
         raise BridgeError("this MT5 account has no XAUUSD symbol")
 
     def _server_offset(self, mt5):
-        # Bars carry trade-server time (RoboForex runs UTC+2/+3), not UTC. The last
-        # tick gives the offset in whole hours; a stale tick (market closed) gives none.
-        tick = mt5.symbol_info_tick(self.symbol)
-        if not tick or not tick.time:
-            return 0
-        diff = tick.time - time.time()
-        if abs(diff) > 14 * 3600:
-            return 0
-        return int(round(diff / 3600.0)) * 3600
+        # The Python MT5 API returns UTC. Never infer an offset from stale ticks.
+        return 0
 
     def candles(self, req):
         if not self.symbol:
@@ -205,6 +201,97 @@ class Bridge:
         finally:
             mt5.market_book_release(self.symbol)
 
+    def market_snapshot(self, _req):
+        if not self.symbol:
+            raise BridgeError("not connected")
+        mt5 = self.mt5()
+        terminal = mt5.terminal_info()
+        if terminal is None or not terminal.connected:
+            raise BridgeError("MT5 terminal is disconnected")
+
+        tick = mt5.symbol_info_tick(self.symbol)
+        if tick is None:
+            code, message = mt5.last_error()
+            raise BridgeError(f"MT5 quote is unavailable for {self.symbol} ({code}): {message}")
+        quote_time = getattr(tick, "time_msc", 0) or int(getattr(tick, "time", 0)) * 1000
+        if not quote_time:
+            raise BridgeError(f"MT5 quote has no timestamp for {self.symbol}")
+        quote = {
+            "time_ms": int(quote_time) - self.offset * 1000,
+            "bid": float(tick.bid),
+            "ask": float(tick.ask),
+        }
+        if quote["time_ms"] <= 0 or not all(math.isfinite(quote[k]) and quote[k] > 0 for k in ("bid", "ask")):
+            raise BridgeError(f"MT5 quote is invalid for {self.symbol}")
+        if quote["ask"] < quote["bid"]:
+            raise BridgeError(f"MT5 quote is crossed for {self.symbol}")
+
+        ticks = []
+        copy_ticks = getattr(mt5, "copy_ticks_from", None)
+        if copy_ticks is not None:
+            since = datetime.fromtimestamp(quote["time_ms"] / 1000, timezone.utc) - timedelta(seconds=10)
+            try:
+                history = copy_ticks(self.symbol, since, MAX_TICKS, mt5.COPY_TICKS_ALL)
+            except Exception:
+                history = None
+            for item in history if history is not None else ():
+                try:
+                    if hasattr(item, "_asdict"):
+                        row = item._asdict()
+                    elif getattr(getattr(item, "dtype", None), "names", None):
+                        row = {name: item[name] for name in item.dtype.names}
+                    else:
+                        row = item
+                    raw_time = row.get("time_msc") or int(row.get("time", 0)) * 1000
+                    tick_time = int(raw_time) - self.offset * 1000
+                    if tick_time <= 0:
+                        continue
+                    bid, ask = float(row.get("bid", 0)), float(row.get("ask", 0))
+                    last = float(row["last"]) if row.get("last") is not None else None
+                    raw_volume = row.get("volume_real")
+                    if raw_volume is None or not math.isfinite(float(raw_volume)) or float(raw_volume) <= 0:
+                        raw_volume = row.get("volume")
+                    volume = (
+                        float(raw_volume)
+                        if raw_volume is not None and math.isfinite(float(raw_volume)) and float(raw_volume) > 0
+                        else None
+                    )
+                    if (
+                        not math.isfinite(bid)
+                        or not math.isfinite(ask)
+                        or bid <= 0
+                        or ask < bid
+                        or (last is not None and (not math.isfinite(last) or last <= 0))
+                    ):
+                        continue
+                    ticks.append({
+                        "time_ms": tick_time,
+                        "bid": bid,
+                        "ask": ask,
+                        "last": last,
+                        "volume": volume,
+                    })
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+            ticks.sort(key=lambda item: item["time_ms"])
+            ticks = ticks[-MAX_TICKS:]
+
+        book = None
+        try:
+            book = self.order_book({})
+            book_note = ""
+        except BridgeError as exc:
+            book_note = str(exc)
+        return {
+            "symbol": self.symbol,
+            "observed_at_ms": time.time_ns() // 1_000_000,
+            "quote": quote,
+            "ticks": ticks,
+            "book": book,
+            "book_note": book_note,
+            "volume_kind": "mt5_ticks_not_exchange_tape",
+        }
+
     def shutdown(self, _req=None):
         if self._mt5 is not None:
             self._mt5.shutdown()
@@ -218,6 +305,7 @@ def serve(bridge, stdin, stdout):
         "connect": bridge.connect,
         "candles": bridge.candles,
         "order_book": bridge.order_book,
+        "market_snapshot": bridge.market_snapshot,
         "shutdown": bridge.shutdown,
     }
     try:

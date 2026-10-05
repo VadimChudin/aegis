@@ -1,5 +1,10 @@
 # AEGIS
 
+**v0.7.0-beta.2:** RoboForex MT5/XAUUSD autonomous AI observer, four configurable strategy
+prompts, 0–100 adherence, optional DOM fallback and automatic simulated decision/outcome
+journaling. **No real orders or model-weight training.** Setup and exact limits:
+[`docs/roboforex-observer.md`](docs/roboforex-observer.md).
+
 Desktop terminal for automated gold (XAU) trading. **v0.6.0:** a separate dockable gold-density screener with continuous broker-specific recording, the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
 
 ## What works
@@ -34,7 +39,7 @@ reports are not part of this beta. The existing strategy backtests remain separa
 | Bybit | System-generated API key + secret of a Unified Trading Account. Read-only is enough now. Bind the key to your IP or Bybit expires it after 90 days. |
 | RoboForex | **Windows only.** The RoboForex MT5 terminal, Python 3.9+, and `pip install MetaTrader5`. MT5 login, password and server (for example `RoboForex-ECN`); terminal and Python paths are optional. MT4 accounts cannot connect. |
 
-MT5 has no network API, so AEGIS starts a small Python process (`python/aegis_lab/bridges/mt5_bridge.py`) that talks to the local terminal. MT5 bars carry the broker's server time; the bridge converts them to UTC.
+MT5 has no network API, so AEGIS starts a small Python process (`python/aegis_lab/bridges/mt5_bridge.py`) that talks to the local terminal. The MT5 Python API returns UTC timestamps; AEGIS preserves them without inferring a clock offset from stale quotes.
 
 ## Local AI
 
@@ -72,9 +77,9 @@ OpenRouter consultation and order/position management are not implemented by thi
 local question box cannot see current markets or place orders.
 
 Next stages and the future training-data contract are described in
-[`docs/local_ai_roadmap.md`](docs/local_ai_roadmap.md). Stage 2 is an autonomous
-market observer with strategy rules and an automatic decision/outcome journal;
-dataset import and weight fine-tuning are planned, not implemented.
+[`docs/local_ai_roadmap.md`](docs/local_ai_roadmap.md). Stage 2 is implemented for
+RoboForex MT5/XAUUSD: autonomous observation, strategy prompts and an automatic
+decision/outcome simulation journal. Dataset import and weight fine-tuning remain planned.
 
 For an explicit runtime smoke test (not part of normal tests):
 

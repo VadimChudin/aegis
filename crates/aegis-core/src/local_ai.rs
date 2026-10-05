@@ -499,6 +499,64 @@ impl Runtime {
         .await
     }
 
+    pub async fn observe(&self, prompt: &str, system: &str) -> Result<Answer, String> {
+        if prompt.len().saturating_add(system.len()) > 14_000 {
+            return Err("Observer request exceeds local context budget; shorten the strategy prompt".into());
+        }
+        let at = Instant::now();
+        let snapshot_id = serde_json::from_str::<Value>(prompt)
+            .map_err(|e| e.to_string())?
+            .pointer("/snapshot/id")
+            .and_then(Value::as_u64)
+            .ok_or("Observer snapshot id missing")?;
+        let schema = json!({"type":"object","additionalProperties":false,
+            "properties":{
+                "snapshot_id":{"const":snapshot_id},
+                "action":{"type":"string","enum":["wait","long","short"]},
+                "reason":{"type":"string","maxLength":160},
+                "stop":{"type":["number","null"]},"target":{"type":["number","null"]},
+                "used_timeframes":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"string","enum":["1m","5m","15m","1h","4h","1d"]}},
+                "checks":{"type":"array","maxItems":4,"items":{"type":"object","additionalProperties":false,
+                    "properties":{"rule":{"type":"string"},"met":{"type":"boolean"},"evidence":{"type":"string","maxLength":80}},
+                    "required":["rule","met","evidence"]}}
+            },"required":["snapshot_id","action","reason","stop","target","used_timeframes","checks"]});
+        let response = http(Duration::from_secs(28))?
+            .post(format!("{}/api/chat", self.endpoint))
+            .json(&json!({
+                "model": MODEL, "stream": false, "think": false, "keep_alive": "10m", "format":schema,
+                "messages": [{"role":"system","content":system},{"role":"user","content":prompt}],
+                "options": {"num_ctx":4096,"num_predict":256,"temperature":0}
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Observer inference failed or exceeded deadline: {e}"))?;
+        let code = response.status();
+        let value: Value = response.json().await.map_err(|e| e.to_string())?;
+        if !code.is_success() || value["error"].is_string() {
+            return Err(format!(
+                "Ollama: {}",
+                value["error"].as_str().unwrap_or("Observer request failed")
+            ));
+        }
+        if value["done_reason"] == "length" {
+            return Err("Model output exceeded token limit; no action accepted".into());
+        }
+        let used = value["prompt_eval_count"].as_u64().unwrap_or(0);
+        if used > 3_700 {
+            return Err("Model input exhausted context budget; no action accepted".into());
+        }
+        let response = value["message"]["content"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("Ollama returned an empty observer decision")?
+            .to_owned();
+        Ok(Answer {
+            response,
+            elapsed_ms: at.elapsed().as_millis() as u64,
+            memories_used: 0,
+        })
+    }
+
     pub async fn ask(&self, prompt: &str, system: &str, memories_used: usize, tokens: u32) -> Result<Answer, String> {
         if prompt.trim().is_empty() || prompt.len() > 2000 {
             return Err("Enter a prompt of 1–2000 UTF-8 bytes".into());

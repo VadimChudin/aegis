@@ -494,7 +494,10 @@ pub async fn ai_close(state: State<'_, AppState>, broker: BrokerId, position_id:
     state.ai.save(&r)
 }
 #[tauri::command]
-pub async fn ai_start(state: State<'_, AppState>, broker: BrokerId) -> Result<(), String> {
+pub async fn ai_start(app: AppHandle, state: State<'_, AppState>, broker: BrokerId) -> Result<(), String> {
+    if app.state::<crate::observer_cmd::ObserverState>().running() {
+        return Err("Stop the RoboForex observer before starting legacy AI Paper".into());
+    }
     if let Some(e) = &state.ai.recovery_error {
         return Err(e.clone());
     }
@@ -517,6 +520,13 @@ pub async fn ai_stop(state: State<'_, AppState>) -> Result<(), String> {
     r.running = false;
     r.message = "Auto остановлен; защитные Paper-стопы продолжают проверяться, пока приложение открыто".into();
     Ok(())
+}
+
+pub async fn stop_auto(state: &AppState) {
+    state.ai.epoch.fetch_add(1, Ordering::SeqCst);
+    let mut runtime = state.ai.inner.lock().await;
+    runtime.running = false;
+    runtime.message = "Legacy Auto disabled while RoboForex Observer is active".into();
 }
 
 #[tauri::command]

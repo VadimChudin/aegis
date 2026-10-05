@@ -69,6 +69,13 @@ impl LocalAiState {
             let _ = local_ai::stop_process(child).await;
         }
     }
+
+    pub async fn observe(&self, prompt: &str, system: &str) -> Result<Answer, String> {
+        let _op = self.begin("Autonomous XAUUSD observation")?;
+        let result = self.runtime.lock().await.observe(prompt, system).await;
+        self.result(&result);
+        result
+    }
 }
 
 struct Operation<'a>(&'a LocalAiState);

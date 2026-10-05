@@ -2,8 +2,9 @@
 
 mod ai_cmd;
 mod bounce_cmd;
-mod local_ai_cmd;
 mod density_cmd;
+mod local_ai_cmd;
+mod observer_cmd;
 mod structural_cmd;
 
 use std::{
@@ -520,7 +521,16 @@ fn main() {
                 .unwrap_or(std::path::Path::new("."))
                 .join("local-ai");
             app.manage(local_ai_cmd::LocalAiState::new(ai_dir));
+            let observer_dir = state
+                .settings
+                .blocking_lock()
+                .path()
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("observer");
+            app.manage(observer_cmd::ObserverState::new(observer_dir));
             app.manage(state);
+            app.state::<observer_cmd::ObserverState>().spawn(app.handle().clone());
             density_cmd::setup_window(app.handle())?;
             async_runtime::spawn(density_cmd::run(app.handle().clone()));
             async_runtime::spawn(ai_cmd::run(app.handle().clone()));
@@ -568,6 +578,12 @@ fn main() {
             local_ai_cmd::local_ai_memory_add,
             local_ai_cmd::local_ai_memory_delete,
             local_ai_cmd::local_ai_memory_export,
+            observer_cmd::observer_info,
+            observer_cmd::observer_save,
+            observer_cmd::observer_start,
+            observer_cmd::observer_stop,
+            observer_cmd::observer_status,
+            observer_cmd::observer_journal,
             structural_cmd::structural_info,
             structural_cmd::structural_save,
             structural_cmd::structural_backtest,
@@ -581,6 +597,9 @@ fn main() {
             density_cmd::dock(handle);
         }
         if let RunEvent::Exit = event {
+            if let Some(state) = handle.try_state::<observer_cmd::ObserverState>() {
+                state.shutdown();
+            }
             if let Some(state) = handle.try_state::<local_ai_cmd::LocalAiState>() {
                 async_runtime::block_on(state.shutdown());
             }

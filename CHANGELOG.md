@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.7.0-beta.2 — RoboForex AI Observer
+
+- Autonomous, read-only RoboForex MT5 `XAUUSD` observation with independent quote sampling,
+  six closed-candle timeframe summaries and deadline-bound local Qwen JSON analysis.
+- Density bounce, SMC/structural reversal, breakout and liquidity sweep: per-strategy prompts,
+  enable switches, timeframe selection and a global 0–100 adherence slider. Strict mode
+  requires rule evidence and built-in mechanical checks; lower values permit extra timeframes
+  without disabling risk, freshness, spread or stop validation.
+- Missing MT5 depth falls back explicitly to quotes, ticks and price levels; CFD tick volume
+  is never presented as exchange tape or genuine resting liquidity.
+- Automatic snapshot/decision/outcome JSONL journal, bounded single-position simulation with
+  spread, configurable commissions/slippage, protective quote marking and restart recovery.
+  Auto is always off after restart. No real orders, training of model weights or new cloud calls.
 
 - **Local AI:** install and extract a checksum-verified official Ollama runtime, download
   Qwen3 8B with progress, start/stop a loopback-only server and test real local inference.

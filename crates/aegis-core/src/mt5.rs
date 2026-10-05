@@ -15,6 +15,7 @@ use tokio::{
 use crate::{
     broker::{require, BrokerError, Probe},
     checks::{Check, Checklist},
+    live_market::MarketSample,
     market::{Candle, Timeframe},
     market_depth::OrderBookSnapshot,
 };
@@ -191,6 +192,16 @@ impl Mt5Bridge {
             .validate()
             .map_err(|e| BrokerError::Parse(format!("MT5 order book: {e}")))?;
         Ok(snapshot)
+    }
+
+    pub(crate) async fn market_sample(&self) -> Result<MarketSample, BrokerError> {
+        let result = self.request(json!({"cmd": "market_snapshot"}), REQUEST_TIMEOUT).await?;
+        let sample: MarketSample =
+            serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 market snapshot: {e}")))?;
+        sample
+            .validate(crate::sign::now_ms().max(0) as u64)
+            .map_err(|e| BrokerError::Parse(format!("MT5 market snapshot: {e}")))?;
+        Ok(sample)
     }
 
     pub(crate) async fn shutdown(&self) {

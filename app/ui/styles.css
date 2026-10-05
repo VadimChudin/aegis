@@ -439,6 +439,8 @@ body.mac .chrome {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
 }
 .rail-item {
   display: flex;

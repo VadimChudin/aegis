@@ -323,6 +323,17 @@
 
   function renderStrategies(list) {
     $("strategyList").replaceChildren(
+      ...[
+        ["density_bounce", "Density bounce"], ["structural", "SMC / structural reversal"],
+        ["breakout", "Breakout"], ["liquidity_sweep", "Liquidity Sweep"],
+      ].map(([id, label]) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "strategy-chip";
+        chip.innerHTML = `<span>${esc(t(label))}</span><span class="v-opt-tag">AI</span>`;
+        chip.onclick = () => openPanel("observer", id);
+        return chip;
+      }),
       ...list.map((s) => {
         const chip = document.createElement("button");
         chip.type = "button";
@@ -454,6 +465,10 @@
       $("panelTitle").textContent = t("Local AI");
       $("panel").classList.add("wide");
       window.AEGIS.localAI.render($("panelBody"));
+    } else if (kind === "observer" && window.AEGIS.observer) {
+      $("panelTitle").textContent = t("AI Observer");
+      $("panel").classList.add("wide");
+      window.AEGIS.observer.render($("panelBody"), focus);
     } else if (kind === "structural" && window.AEGIS.structural) {
       $("panelTitle").textContent = t("Structural reversal");
       $("panel").classList.add("wide", "strategy");
@@ -642,8 +657,9 @@
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
     if (S.panel === "local_ai" && window.AEGIS.localAI) window.AEGIS.localAI.render($("panelBody"));
+    if (S.panel === "observer" && window.AEGIS.observer) window.AEGIS.observer.render($("panelBody"));
     if (S.panel === "structural" && window.AEGIS.structural) window.AEGIS.structural.render($("panelBody"));
-    const titles = { brokers: "Brokers", bounce: "Bounce", structural: "Structural reversal", theme: "Settings", local_ai: "Local AI" };
+    const titles = { brokers: "Brokers", bounce: "Bounce", structural: "Structural reversal", theme: "Settings", local_ai: "Local AI", observer: "AI Observer" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
   }
 

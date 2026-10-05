@@ -68,6 +68,22 @@ async fn connects_with_terminal_checklist_and_utc_candles() {
 }
 
 #[tokio::test]
+async fn reads_live_market_sample_without_orders() {
+    let (conn, report) = Connector::connect(creds("1", "good"), &options()).await;
+    let conn = conn.unwrap_or_else(|| panic!("connect: {report:?}"));
+    let sample = conn.market_sample().await.expect("market sample");
+    assert_eq!(sample.symbol, "XAUUSD.r");
+    assert!(sample.quote.bid > 0.0 && sample.quote.ask >= sample.quote.bid);
+    assert!(!sample.ticks.is_empty());
+    assert_eq!(sample.volume_kind, "mt5_ticks_not_exchange_tape");
+    assert!(sample.book.is_some());
+    sample
+        .validate(sample.observed_at_ms)
+        .expect("fresh market sample validates");
+    conn.close().await;
+}
+
+#[tokio::test]
 async fn wrong_password_fails_login_and_skips_the_terminal() {
     let (conn, report) = Connector::connect(creds("1", "bad"), &options()).await;
     assert!(conn.is_none() && !report.connected);
