@@ -2,6 +2,7 @@
 // Russian and Kazakh translations, keyed by the English source text (see i18n.js).
 window.I18N_DICT = {
  "ru": {
+  "Calculation failed. Try again; any results below are from the previous run.": "Расчёт не выполнен. Попробуйте снова; результаты ниже, если они есть, относятся к предыдущему запуску.",
   "0 = Monday.": "0 = понедельник.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = на дневном экстремуме против сделки (дневной минимум для лонга).",
   "1 when price made a new 12-bar extreme into the level but cumulative delta did not.": "1, если цена обновила 12-барный экстремум у уровня, а кумулятивная дельта — нет.",
@@ -487,6 +488,7 @@ window.I18N_DICT = {
   "Density eaten": "Плотность разобрали"
  },
  "kk": {
+  "Calculation failed. Try again; any results below are from the previous run.": "Есептеу сәтсіз аяқталды. Қайталап көріңіз; төмендегі нәтижелер, бар болса, алдыңғы іске қосуға тиесілі.",
   "0 = Monday.": "0 = дүйсенбі.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = мәмілеге қарсы күндік экстремумда (лонг үшін күндік минимум).",
   "1 when price made a new 12-bar extreme into the level but cumulative delta did not.": "1, егер баға деңгейге қарай 12 барлық жаңа экстремум жасап, ал жинақталған дельта жасамаса.",

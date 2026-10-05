@@ -45,6 +45,7 @@
     spec: null,
     tab: "backtest",
     running: null,
+    errors: {},
     progress: "",
     lines: [],
     liveTimer: null,
@@ -586,7 +587,11 @@
       ([id, label]) => `<button type="button" class="bt-tab${B.tab === id ? " on" : ""}" data-tab="${id}">${esc(t(label))}</button>`,
     ).join("")}</div>`;
     const body = { backtest: backtestHtml, ga: gaHtml, checks: checksTabHtml, compare: compareHtml }[B.tab]();
-    return tabs + body;
+    const error = B.errors[B.tab];
+    const notice = error
+      ? `<div class="hint warn" role="alert"><p>${esc(t("Calculation failed. Try again; any results below are from the previous run."))}</p><p>${esc(error)}</p></div>`
+      : "";
+    return tabs + notice + body;
   }
 
   // ---- render and bind ---------------------------------------------------------------------
@@ -709,12 +714,14 @@
   async function run(kind, f) {
     if (B.running) return;
     B.running = kind;
+    delete B.errors[kind];
     B.progress = t("Loading history…");
     renderResults();
     const t0 = performance.now();
     try {
       await f();
     } catch (e) {
+      B.errors[kind] = String(e);
       log(`Bounce: ${e}`, "bad");
     }
     B.running = null;
