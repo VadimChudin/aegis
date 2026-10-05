@@ -1,5 +1,9 @@
 # AEGIS: AI trading continuation audit
 
+This is the **pre-implementation audit** of v0.6.1. The subsequent experimental
+0.7.0-beta.1 AI Paper implementation is described in [ai-paper.md](ai-paper.md);
+the missing-feature table below records the earlier baseline, not current beta status.
+
 Verified against GitHub and fetched repository refs on 2026-10-04. The attached
 conversation describes intended functionality, not evidence of completed code.
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0-beta.1 — Experimental AI Paper
+
+- Linux user-local Ollama/Qwen3-8B setup with progress, safe extraction and model download.
+- Local JSON decisions and optional single OpenRouter consultation, encrypted key storage,
+  connection tests, persistent request quotas and conservative cost reservations.
+- Strategy preprompts, simulated positions, aggregate risk/leverage/daily-loss limits,
+  independent quote-based stops, manual close, journal and restart recovery.
+- Russian AI Paper panel. No real orders, live MT5 execution, scheduled email reports or
+  Windows/macOS automatic model installation. See `docs/ai-paper.md` for exact limits.
+
 ## 0.6.1 — 2026-10-01
 
 - Compact red setup button and an explicit “Add my setup” form with unique names and persistent parameter snapshots; the orange research paragraph is replaced by a collapsed neutral disclosure.

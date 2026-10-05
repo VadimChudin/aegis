@@ -1,6 +1,7 @@
 //! AEGIS core: market data types, broker connectors, settings and the strategy registry.
 //! The desktop app (`app/src-tauri`) is a thin shell over this crate.
 
+pub mod ai;
 pub mod bounce;
 pub mod broker;
 pub mod checks;

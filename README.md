@@ -4,6 +4,13 @@ Desktop terminal for automated gold (XAU) trading. **v0.6.0:** a separate dockab
 
 ## What works
 
+**v0.7.0-beta.1 adds experimental AI Paper, not live trading.** The AI panel can
+install a user-local Ollama/Qwen3-8B runtime on Linux x86-64, save an encrypted
+OpenRouter key, run broker-specific numeric decisions, and manage simulated
+positions within hard risk and API budgets. See [AI Paper setup and limits](docs/ai-paper.md).
+Real-money execution, Windows/macOS automatic model installation and email
+reports are not part of this beta. The existing strategy backtests remain separate.
+
 - **Structural reversal (experimental):** independent slider/toggle panel on six-month Bybit trade archives, cached native downloads, custom presets and a red **Setup 1 + · +0.85R / 5 trades** retrospective preset. No live orders; five trades do not prove profitability. Rules and limitations: [`docs/structural-reversal.md`](docs/structural-reversal.md).
 - **Brokers:** Binance (USDⓈ-M futures `XAUUSDT`), Bybit (USDT perpetual `XAUUSDT`) and RoboForex (MetaTrader 5 `XAUUSD`). **All three can be connected at the same time.**
 - **Chart source:** pick any connected broker in the header. The chart only ever shows that broker's data; it never mixes venues.

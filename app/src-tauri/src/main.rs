@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai_cmd;
 mod bounce_cmd;
 mod density_cmd;
 mod structural_cmd;
@@ -52,6 +53,7 @@ struct AppState {
     binance_public: String,
     density: density_cmd::DensityState,
     structural: structural_cmd::StructuralState,
+    ai: ai_cmd::AiState,
 }
 
 impl AppState {
@@ -174,6 +176,7 @@ mod tests {
             binance_public: String::new(),
             density: density_cmd::DensityState::new(std::env::temp_dir().join("aegis-test-densities")),
             structural: structural_cmd::StructuralState::default(),
+            ai: ai_cmd::AiState::new(std::env::temp_dir().join("aegis-test-ai-paper.json")),
         };
         let fields = |secret: &str| {
             BTreeMap::from([
@@ -494,6 +497,7 @@ fn setup_state(app: &AppHandle) -> AppState {
         cache_dir,
         binance_public,
         structural: structural_cmd::StructuralState::default(),
+        ai: ai_cmd::AiState::new(dir.join("ai-paper.json")),
         density: density_cmd::DensityState::new(
             app.path()
                 .app_data_dir()
@@ -510,9 +514,19 @@ fn main() {
             app.manage(state);
             density_cmd::setup_window(app.handle())?;
             async_runtime::spawn(density_cmd::run(app.handle().clone()));
+            async_runtime::spawn(ai_cmd::run(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai_cmd::ai_status,
+            ai_cmd::ai_save,
+            ai_cmd::ai_forget_key,
+            ai_cmd::ai_start,
+            ai_cmd::ai_stop,
+            ai_cmd::ai_step,
+            ai_cmd::ai_close,
+            ai_cmd::ai_test,
+            ai_cmd::ai_setup_model,
             bootstrap,
             settings_get,
             sessions,
@@ -549,6 +563,7 @@ fn main() {
         }
         if let RunEvent::Exit = event {
             if let Some(state) = handle.try_state::<AppState>() {
+                async_runtime::block_on(ai_cmd::shutdown(&state));
                 async_runtime::block_on(state.close_all());
             }
         }
