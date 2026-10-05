@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai_cmd;
 mod bounce_cmd;
 mod local_ai_cmd;
+mod density_cmd;
+mod structural_cmd;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -49,6 +52,9 @@ struct AppState {
     cache_dir: PathBuf,
     /// Public futures API for the latest klines (no key needed).
     binance_public: String,
+    density: density_cmd::DensityState,
+    structural: structural_cmd::StructuralState,
+    ai: ai_cmd::AiState,
 }
 
 impl AppState {
@@ -64,6 +70,7 @@ impl AppState {
 
     async fn close(&self, broker: BrokerId) {
         self.stop_feed(Some(broker));
+        self.density.invalidate(broker).await;
         if let Some(old) = self.sessions.lock().await.remove(&broker) {
             old.connector.close().await;
         }
@@ -168,6 +175,9 @@ mod tests {
             bounce: bounce_cmd::BounceState::default(),
             cache_dir: std::env::temp_dir(),
             binance_public: String::new(),
+            density: density_cmd::DensityState::new(std::env::temp_dir().join("aegis-test-densities")),
+            structural: structural_cmd::StructuralState::default(),
+            ai: ai_cmd::AiState::new(std::env::temp_dir().join("aegis-test-ai-paper.json")),
         };
         let fields = |secret: &str| {
             BTreeMap::from([
@@ -330,18 +340,28 @@ async fn set_auto_connect(state: State<'_, AppState>, broker: BrokerId, on: bool
 }
 
 #[tauri::command]
-async fn set_lang(state: State<'_, AppState>, lang: String) -> Result<(), String> {
+async fn set_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Result<(), String> {
     let mut settings = state.settings.lock().await;
     settings.set_lang(&lang);
     state.save(&settings).await;
+    let public = settings.public();
+    let _ = app.emit(
+        "density_preferences",
+        serde_json::json!({"lang": public.lang, "theme": public.theme}),
+    );
     Ok(())
 }
 
 #[tauri::command]
-async fn set_theme(state: State<'_, AppState>, theme: String) -> Result<(), String> {
+async fn set_theme(app: AppHandle, state: State<'_, AppState>, theme: String) -> Result<(), String> {
     let mut settings = state.settings.lock().await;
     settings.set_theme(&theme);
     state.save(&settings).await;
+    let public = settings.public();
+    let _ = app.emit(
+        "density_preferences",
+        serde_json::json!({"lang": public.lang, "theme": public.theme}),
+    );
     Ok(())
 }
 
@@ -477,6 +497,14 @@ fn setup_state(app: &AppHandle) -> AppState {
         bounce: bounce_cmd::BounceState::default(),
         cache_dir,
         binance_public,
+        structural: structural_cmd::StructuralState::default(),
+        ai: ai_cmd::AiState::new(dir.join("ai-paper.json")),
+        density: density_cmd::DensityState::new(
+            app.path()
+                .app_data_dir()
+                .unwrap_or_else(|_| dir.clone())
+                .join("densities"),
+        ),
     }
 }
 
@@ -493,9 +521,21 @@ fn main() {
                 .join("local-ai");
             app.manage(local_ai_cmd::LocalAiState::new(ai_dir));
             app.manage(state);
+            density_cmd::setup_window(app.handle())?;
+            async_runtime::spawn(density_cmd::run(app.handle().clone()));
+            async_runtime::spawn(ai_cmd::run(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai_cmd::ai_status,
+            ai_cmd::ai_save,
+            ai_cmd::ai_forget_key,
+            ai_cmd::ai_start,
+            ai_cmd::ai_stop,
+            ai_cmd::ai_step,
+            ai_cmd::ai_close,
+            ai_cmd::ai_test,
+            ai_cmd::ai_setup_model,
             bootstrap,
             settings_get,
             sessions,
@@ -506,6 +546,11 @@ fn main() {
             set_theme,
             load_chart,
             stop_chart,
+            density_cmd::density_snapshot,
+            density_cmd::density_select,
+            density_cmd::density_open,
+            density_cmd::density_hide,
+            density_cmd::density_set_docked,
             bounce_cmd::bounce_info,
             bounce_cmd::bounce_save,
             bounce_cmd::bounce_backtest,
@@ -523,17 +568,24 @@ fn main() {
             local_ai_cmd::local_ai_memory_add,
             local_ai_cmd::local_ai_memory_delete,
             local_ai_cmd::local_ai_memory_export,
+            structural_cmd::structural_info,
+            structural_cmd::structural_save,
+            structural_cmd::structural_backtest,
             set_lang
         ])
         .build(tauri::generate_context!())
         .expect("failed to start AEGIS");
 
     app.run(|handle, event| {
+        if let RunEvent::Ready = event {
+            density_cmd::dock(handle);
+        }
         if let RunEvent::Exit = event {
             if let Some(state) = handle.try_state::<local_ai_cmd::LocalAiState>() {
                 async_runtime::block_on(state.shutdown());
             }
             if let Some(state) = handle.try_state::<AppState>() {
+                async_runtime::block_on(ai_cmd::shutdown(&state));
                 async_runtime::block_on(state.close_all());
             }
         }

@@ -55,6 +55,8 @@ pub struct Settings {
     /// Strategy id → its settings (sliders and toggles), as JSON.
     #[serde(default)]
     pub strategies: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    ai_key: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -74,6 +76,7 @@ impl Default for Settings {
             lang: String::new(),
             brokers: BTreeMap::new(),
             strategies: BTreeMap::new(),
+            ai_key: None,
         }
     }
 }
@@ -163,6 +166,18 @@ impl SettingsStore {
 
     pub fn strategy(&self, id: &str) -> Option<&serde_json::Value> {
         self.data.strategies.get(id)
+    }
+
+    pub fn ai_key(&self) -> Option<String> {
+        self.data.ai_key.as_deref().and_then(|value| self.decrypt(value))
+    }
+
+    pub fn set_ai_key(&mut self, value: &str) {
+        self.data.ai_key = Some(self.encrypt(value));
+    }
+
+    pub fn forget_ai_key(&mut self) {
+        self.data.ai_key = None;
     }
 
     pub fn set_chart(&mut self, broker: Option<BrokerId>, timeframe: Timeframe) {
@@ -322,6 +337,28 @@ mod tests {
 
     fn form(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn ai_key_is_encrypted_private_and_forgettable() {
+        let path = tmp("ai-key");
+        let mut store = SettingsStore::open_with_key(&path, [11; 32]);
+        store.set_ai_key("example-not-a-real-provider-key");
+        store.save().unwrap();
+        assert!(!fs::read_to_string(&path)
+            .unwrap()
+            .contains("example-not-a-real-provider-key"));
+        assert!(!serde_json::to_string(&store.public())
+            .unwrap()
+            .contains("example-not-a-real-provider-key"));
+        assert_eq!(
+            SettingsStore::open_with_key(&path, [11; 32]).ai_key().as_deref(),
+            Some("example-not-a-real-provider-key")
+        );
+        assert!(SettingsStore::open_with_key(&path, [12; 32]).ai_key().is_none());
+        store.forget_ai_key();
+        store.save().unwrap();
+        assert!(SettingsStore::open_with_key(&path, [11; 32]).ai_key().is_none());
     }
 
     #[test]

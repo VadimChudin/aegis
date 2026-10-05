@@ -1,9 +1,17 @@
 # AEGIS
 
-Desktop terminal for automated gold (XAU) trading. **v0.5.1:** the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
+Desktop terminal for automated gold (XAU) trading. **v0.6.0:** a separate dockable gold-density screener with continuous broker-specific recording, the gold chart from any connected broker, a Brokers panel with per-broker requirements and connect checks, saved encrypted credentials, three languages (English, Русский, Қазақша), and the **Bounce** strategy with sliders, a win-probability model, a backtest, a walk-forward genetic algorithm and statistical checks. It does not place orders. The Bounce strategy currently has **no edge** in backtests (see the research report).
 
 ## What works
 
+**v0.7.0-beta.1 adds experimental AI Paper, not live trading.** The AI panel can
+install a user-local Ollama/Qwen3-8B runtime on Linux x86-64, save an encrypted
+OpenRouter key, run broker-specific numeric decisions, and manage simulated
+positions within hard risk and API budgets. See [AI Paper setup and limits](docs/ai-paper.md).
+Real-money execution, Windows/macOS automatic model installation and email
+reports are not part of this beta. The existing strategy backtests remain separate.
+
+- **Structural reversal (experimental):** independent slider/toggle panel on six-month Bybit trade archives, cached native downloads, custom presets and a red **Setup 1 + · +0.85R / 5 trades** retrospective preset. No live orders; five trades do not prove profitability. Rules and limitations: [`docs/structural-reversal.md`](docs/structural-reversal.md).
 - **Brokers:** Binance (USDⓈ-M futures `XAUUSDT`), Bybit (USDT perpetual `XAUUSDT`) and RoboForex (MetaTrader 5 `XAUUSD`). **All three can be connected at the same time.**
 - **Chart source:** pick any connected broker in the header. The chart only ever shows that broker's data; it never mixes venues.
 - **Timeframes:** 1m, 5m, 15m, 1h, 4h, 1d. 500 bars of history, then the last bar updates every second.
@@ -89,6 +97,17 @@ python/aegis_lab/      Python: MT5 bridge, Binance and Bybit archive downloaders
 scripts/mock_venues.py local Binance/Bybit stand-in for development and tests
 ```
 
+## Density screener
+
+The terminal opens a separate, dockable gold order-book density window at startup. It monitors the
+selected connected broker even while the window is hidden, and records sampled densities and
+observations as rotating JSONL files in the application data folder (`densities/`). Binance and
+Bybit provide exchange books; RoboForex requires the MT5 symbol to expose a DOM. Missing DOM is
+shown as unavailable, never substituted with candle or another venue's data. Scores describe
+observations, not calibrated probabilities; no live orders are placed.
+
+Full Bounce setting inventory and screener rules: [Русское описание](docs/density-screener.md).
+
 ## Develop
 
 Needs Rust (stable), Node 18+ and Python 3.9+. On Linux also the Tauri system libraries (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`).
@@ -109,10 +128,19 @@ AEGIS_BYBIT_URL=http://127.0.0.1:8765/bybit AEGIS_CONFIG_DIR=/tmp/aegis-dev carg
 
 ## Release
 
+Linux x86-64 packages are built on Ubuntu 24.04 as `.deb` files. Install with
+`sudo apt install ./AEGIS_0.6.1_amd64.deb` (use the filename of your download),
+then launch `aegis`. A graphical desktop and WebKitGTK 4.1 are required; apt
+resolves the declared runtime dependencies. Older distributions are not verified.
+RoboForex's official MetaTrader5 Python integration remains Windows-only; the
+Linux package does not make real MT5 connectivity available on Linux.
+
+Linux package verification and limitations: [Linux release checks](docs/linux-release.md).
+
 Bump the version in `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/package.json`, add a `CHANGELOG` entry, then push a tag:
 
 ```bash
-git tag v0.5.1 && git push origin v0.5.1
+git tag v0.6.0 && git push origin v0.6.0
 ```
 
 GitHub Actions builds `AEGIS_<ver>_x64-setup.exe` (Windows) and `AEGIS_<ver>_universal.dmg` (macOS, Apple Silicon + Intel, ad-hoc signed; first launch needs *System Settings → Privacy & Security → Open Anyway*).

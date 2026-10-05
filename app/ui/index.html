@@ -22,8 +22,10 @@
         </div>
         <div class="chrome-center">
           <div class="broker-dots" id="brokerDots"></div>
+          <button class="density-open" id="btnDensities" type="button" title="Density screener">Densities</button>
         </div>
         <div class="chrome-right">
+          <button class="ghost" id="btnAiStop" type="button" title="Остановить AI Paper; текущие Paper-стопы остаются под контролем">Стоп AI</button>
           <span class="lamp" id="feedLamp" data-on="0" title="Offline"></span>
           <button class="cta" id="btnBrokers" type="button" data-i18n>Brokers</button>
           <button class="ghost-round" id="btnMenu" type="button" title="Menu" data-i18n-title>
@@ -36,12 +38,15 @@
         </div>
       </header>
 
+      <div class="browser-notice" id="browserNotice" role="status" hidden></div>
+
       <main class="stage">
         <aside class="rail glass" id="rail">
           <button class="rail-item on" data-panel="chart" type="button"><span class="ico">⌂</span><span>AEGIS</span></button>
           <button class="rail-item" data-panel="brokers" type="button"><span class="ico">▣</span><span data-i18n>Brokers</span></button>
           <button class="rail-item" data-panel="local_ai" type="button"><span class="ico">◈</span><span data-i18n>Local AI</span></button>
           <button class="rail-item" data-panel="theme" type="button"><span class="ico">⚙</span><span data-i18n>Settings</span></button>
+          <button class="rail-item" data-panel="ai" type="button"><span class="ico">✦</span><span>AI · Paper</span></button>
           <div class="rail-sep"></div>
           <div class="rail-label" data-i18n>Strategies</div>
           <div id="strategyList" class="strategy-list"></div>
@@ -98,8 +103,12 @@
     <script src="vendor/lightweight-charts.standalone.production.js"></script>
     <script src="i18n.js"></script>
     <script src="i18n-dict.js"></script>
+    <script src="structural-i18n.js"></script>
     <script src="app.js"></script>
     <script src="bounce.js"></script>
     <script src="local-ai.js"></script>
+    <script src="structural.js"></script>
+    <script src="ai.js"></script>
+    <link rel="stylesheet" href="ai.css">
   </body>
 </html>

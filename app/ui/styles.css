@@ -1397,7 +1397,40 @@ body.mac .chrome {
   display: flex;
   align-items: center;
   position: relative;
+  gap: 10px;
 }
+.density-open {
+  padding: 8px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.density-open:hover {
+  background: var(--fill-strong);
+  border-color: var(--chip-edge);
+}
+.browser-notice {
+  position: absolute;
+  z-index: 6;
+  top: 72px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  text-align: center;
+  font-size: 11px;
+}
+.browser-notice[hidden] { display: none; }
 /* out of flow, so expanding it never shifts the centred Paper/Auto switch */
 .chrome-center > .money-badge {
   position: absolute;
@@ -2011,6 +2044,18 @@ details.adv[open] > summary {
   stroke-width: 1.6;
   vector-effect: non-scaling-stroke;
 }
+
+.st-research { border:1px solid #ef4444; background:rgba(239,68,68,.12); color:#ff7272; border-radius:8px; padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+.st-research:hover { background:rgba(239,68,68,.26); }
+.st-setups { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.st-research-note { margin:8px 0; color:var(--muted); font-size:12px; }
+.st-research-note summary { cursor:pointer; }
+.st-setup-form { margin:10px 0; padding:12px; border:1px solid var(--line); border-radius:10px; }
+.st-setup-form label { display:block; margin-bottom:6px; color:var(--muted); font-size:12px; }
+.st-setup-form .bt-input { width:100%; box-sizing:border-box; }
+.st-dates { display:flex; gap:12px; margin:16px 0; }
+.st-dates label { display:flex; flex-direction:column; gap:6px; color:var(--muted); min-width:0; }
+.st-dates input { background:var(--surface); color:var(--text); padding:8px; border:1px solid var(--line); border-radius:8px; }
 .bt-equity line {
   stroke: var(--hair);
   vector-effect: non-scaling-stroke;

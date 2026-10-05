@@ -9,6 +9,31 @@
   local answers, delete individual records and export a JSONL dataset. This is persistent
   retrieval memory, not model-weight training, live market monitoring or order execution.
 
+## 0.7.0-beta.1 — Experimental AI Paper
+
+- Linux user-local Ollama/Qwen3-8B setup with progress, safe extraction and model download.
+- Local JSON decisions and optional single OpenRouter consultation, encrypted key storage,
+  connection tests, persistent request quotas and conservative cost reservations.
+- Strategy preprompts, simulated positions, aggregate risk/leverage/daily-loss limits,
+  independent quote-based stops, manual close, journal and restart recovery.
+- Russian AI Paper panel. No real orders, live MT5 execution, scheduled email reports or
+  Windows/macOS automatic model installation. See `docs/ai-paper.md` for exact limits.
+
+## 0.6.1 — 2026-10-01
+
+- Compact red setup button and an explicit “Add my setup” form with unique names and persistent parameter snapshots; the orange research paragraph is replaced by a collapsed neutral disclosure.
+- **Experimental structural reversal:** a separate strategy panel with 31 sliders/toggles, saved parameters and custom presets, inclusive date selection and cached native Bybit trade-archive loading (up to 184 complete days). Prior-day raid → reclaim → structure confirmation, market or limit-retest entry, stops, time exits, original mapped targets, cost and remaining reward/risk gates.
+- **Red “Setup 1 + · +0.85R / 5 trades” preset:** reproduces the retrospective April–September 2026 diagnostic. Clearly labelled exploratory, with cost filter off; not a proven edge. Current backtest results, stale-settings warning, R equity, monthly results, latest trades and rejection counts are separate from the historical badge. No live orders, FIFO, funding or liquidation claims.
+- Keeps the v0.6.0 density screener. Rules and assumptions: `docs/structural-reversal.md`.
+
+## 0.6.0 — 2026-09-30
+
+- **Gold-density screener:** a separate Glass window opens beside the terminal at startup, follows its movement and size, and can be hidden/reopened or detached and magnetically reattached. It shares the terminal's theme and language.
+- **Broker-specific order books:** monitors the active connected source's gold instrument on Binance futures, Bybit linear or RoboForex MT5. Missing MT5 DOM is shown as unavailable, never substituted with candles or another venue's book. Invalid, crossed and stale snapshots are rejected.
+- **Density observations:** price, side, size, strength relative to side median, observed age, sampled distinct touches/reactions and an observational score. The score is not a calibrated authenticity or bounce probability. No live orders are placed.
+- **Continuous recording:** sampled densities and events are saved in rotating 16 MiB JSONL files under the application data folder, even while the screener is hidden. Recording errors are surfaced; tracking resets on source/session changes or gaps. Old files are not automatically deleted.
+- **Documentation and development:** complete Bounce setting inventory and screener rules in `docs/density-screener.md`, reproducible Linux setup, and an explicitly offline browser Preview. Native interaction verified on Linux with test brokers; real MT5 DOM and Windows/macOS window behavior still require live validation.
+
 ## 0.5.1 — 2026-09-29
 
 - **Fix (Brokers):** the broker form stays usable while a connection check runs: the typed values are kept, only the Connect button shows *Connecting…*, and every label is linked to its field.

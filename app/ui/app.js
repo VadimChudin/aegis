@@ -60,6 +60,15 @@
     volumes.setData(S.bars.map(volBar));
   }
 
+  function densityButtonLabel() {
+    const lang = window.I18N.lang;
+    return lang === "ru" ? "Плотности" : lang === "kk" ? "Тығыздықтар" : "Densities";
+  }
+
+  function selectDensitySource(broker) {
+    invoke("density_select", { broker }).catch((err) => log(`Density source: ${err}`, "warn"));
+  }
+
   // ---- chart ------------------------------------------------------------------
 
   // The chart formats with navigator.language; a POSIX locale such as "C" makes Intl throw.
@@ -132,6 +141,7 @@
     if (S.btView) window.AEGIS.bounce?.leaveBacktestView(true);
     const request = ++S.chart.request;
     S.chart.broker = broker;
+    selectDensitySource(broker);
     const tf = S.chart.tf;
     S.chart.error = null;
     S.chart.generation = -1;
@@ -164,6 +174,7 @@
   async function stopChart() {
     ++S.chart.request;
     S.chart.broker = null;
+    selectDensitySource(null);
     S.chart.error = null;
     S.chart.generation = -1;
     await invoke("stop_chart");
@@ -443,6 +454,15 @@
       $("panelTitle").textContent = t("Local AI");
       $("panel").classList.add("wide");
       window.AEGIS.localAI.render($("panelBody"));
+    } else if (kind === "structural" && window.AEGIS.structural) {
+      $("panelTitle").textContent = t("Structural reversal");
+      $("panel").classList.add("wide", "strategy");
+      document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
+      window.AEGIS.structural.render($("panelBody"));
+    } else if (kind === "ai" && window.AEGIS.ai) {
+      $("panelTitle").textContent = "AI · Paper";
+      $("panel").classList.add("wide");
+      window.AEGIS.ai.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
       $("panel").classList.remove("wide");
@@ -614,13 +634,16 @@
   async function setLang(lang, persist) {
     window.I18N.set(lang);
     S.settings.lang = window.I18N.lang;
+    $("btnDensities").textContent = densityButtonLabel();
+    $("btnDensities").title = window.I18N.lang === "ru" ? "Скринер плотностей" : window.I18N.lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
     if (persist) await invoke("set_lang", { lang: window.I18N.lang });
     renderStrategies(S.strategies || []);
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
     if (S.panel === "local_ai" && window.AEGIS.localAI) window.AEGIS.localAI.render($("panelBody"));
-    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings", local_ai: "Local AI" };
+    if (S.panel === "structural" && window.AEGIS.structural) window.AEGIS.structural.render($("panelBody"));
+    const titles = { brokers: "Brokers", bounce: "Bounce", structural: "Structural reversal", theme: "Settings", local_ai: "Local AI" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
   }
 
@@ -666,8 +689,38 @@
   // ---- boot ---------------------------------------------------------------------
 
   async function boot() {
+    $("btnDensities").onclick = async () => {
+      if (tauri) {
+        try {
+          await invoke("density_open");
+          return;
+        } catch (err) {
+          log(`Density window: ${err}`, "warn");
+        }
+      }
+      window.open("densities.html", "aegis-densities", "popup,width=460,height=820,resizable=yes");
+    };
     if (!tauri) {
-      setLamp("halt", "Open AEGIS through the desktop app");
+      const lang = window.I18N.detect();
+      window.I18N.set(lang);
+      $("btnDensities").textContent = densityButtonLabel();
+      $("btnDensities").title = lang === "ru" ? "Скринер плотностей" : lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
+      $("browserNotice").hidden = false;
+      $("browserNotice").textContent = lang === "ru"
+        ? "Предпросмотр в браузере: подключите настольное приложение для данных брокеров."
+        : lang === "kk"
+          ? "Браузердегі алдын ала көру: брокер деректері үшін жұмыс үстелі қолданбасын ашыңыз."
+          : "Browser preview only · Open the desktop app to connect broker data.";
+      $("btnBrokers").disabled = true;
+      $("btnMenu").disabled = true;
+      $("emptyConnect").hidden = true;
+      $("emptyText").textContent = lang === "ru"
+        ? "Просмотр не подключён к брокеру и не получает рыночные данные."
+        : lang === "kk"
+          ? "Алдын ала көру брокерге қосылмаған және нарық деректерін алмайды."
+          : "This preview is not connected to a broker and receives no market data.";
+      $("statBrokers").textContent = "—";
+      setLamp("halt", $("browserNotice").textContent);
       return;
     }
     window.addEventListener("error", (e) => log(`UI error: ${e.message}`, "bad"));
@@ -704,6 +757,7 @@
     };
     $("panelClose").onclick = closePanel;
     $("btnBrokers").onclick = () => openPanel("brokers");
+    $("btnDensities").textContent = densityButtonLabel();
     $("emptyConnect").onclick = () => (S.chart.error ? loadChart(S.chart.broker) : openPanel("brokers"));
     document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => openPanel(b.dataset.open)));
     document.querySelectorAll(".rail-item").forEach((b) => {
