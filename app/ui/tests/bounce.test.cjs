@@ -5,6 +5,7 @@ const vm = require("node:vm");
 
 function harness() {
   const logs = [];
+  const body = { innerHTML: "", querySelectorAll: () => [] };
   const window = {
     I18N: { t: (text) => text },
     AEGIS: {
@@ -15,12 +16,14 @@ function harness() {
   };
   const source = readFileSync(require.resolve("../bounce.js"), "utf8").replace(
     "  A.bounce = { render, leaveBacktestView, onLiveChart };",
-    `  render = () => {};
+    `  A.test = { B, run, resultsHtml, renderPanel: render, gaSpecHtml, applyGa };
+       render = () => {};
        renderResults = () => {};
-       A.test = { B, run, resultsHtml };`,
+    `,
   );
-  vm.runInNewContext(source, { window, document: { addEventListener() {} }, performance, setTimeout, clearTimeout });
-  return { ...window.AEGIS.test, logs };
+  const document = { addEventListener() {}, getElementById: (id) => id === "panelBody" ? body : null };
+  vm.runInNewContext(source, { window, document, performance, setTimeout, clearTimeout });
+  return { ...window.AEGIS.test, logs, body };
 }
 
 test("failed calculations retain previous results and record a tab-specific error", async () => {
@@ -68,4 +71,39 @@ test("retry clears only its own error and rejects overlapping calculations", asy
   finish();
   await pending;
   assert.equal(B.running, null);
+});
+
+test("strategy and GA controls lock during all calculations and unlock after failure or success", async () => {
+  for (const kind of ["backtest", "ga", "checks"]) {
+    for (const fail of [false, true]) {
+      const { B, body, run, renderPanel, gaSpecHtml } = harness();
+      B.info = { specs: [], presets: {}, features: [] };
+      B.params = {};
+      B.spec = { metrics: [] };
+      let finish;
+      const pending = run(kind, () => new Promise((resolve, reject) => {
+        finish = () => fail ? reject("offline") : resolve();
+      }));
+      renderPanel();
+      assert.match(body.innerHTML, /Settings are locked/);
+      assert.match(body.innerHTML, /<fieldset class="bt-controls" disabled>/);
+      assert.match(gaSpecHtml(), /<fieldset class="bt-controls" disabled>/);
+      finish();
+      await pending;
+      renderPanel();
+      assert.doesNotMatch(body.innerHTML, /Settings are locked/);
+      assert.doesNotMatch(body.innerHTML, /<fieldset class="bt-controls" disabled>/);
+      assert.doesNotMatch(gaSpecHtml(), /<fieldset class="bt-controls" disabled>/);
+    }
+  }
+});
+
+test("GA settings cannot be applied during another calculation", () => {
+  const { B, applyGa } = harness();
+  const params = { maker_bps: 2 };
+  B.params = params;
+  B.opt = { report: { params: { maker_bps: 5 } } };
+  B.running = "backtest";
+  applyGa();
+  assert.equal(B.params, params);
 });

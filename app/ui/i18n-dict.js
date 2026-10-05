@@ -2,6 +2,7 @@
 // Russian and Kazakh translations, keyed by the English source text (see i18n.js).
 window.I18N_DICT = {
  "ru": {
+  "Settings are locked while a calculation is running.": "Настройки заблокированы, пока выполняется расчёт.",
   "Calculation failed. Try again; any results below are from the previous run.": "Расчёт не выполнен. Попробуйте снова; результаты ниже, если они есть, относятся к предыдущему запуску.",
   "0 = Monday.": "0 = понедельник.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = на дневном экстремуме против сделки (дневной минимум для лонга).",
@@ -488,6 +489,7 @@ window.I18N_DICT = {
   "Density eaten": "Плотность разобрали"
  },
  "kk": {
+  "Settings are locked while a calculation is running.": "Есептеу орындалып жатқанда параметрлер бұғатталады.",
   "Calculation failed. Try again; any results below are from the previous run.": "Есептеу сәтсіз аяқталды. Қайталап көріңіз; төмендегі нәтижелер, бар болса, алдыңғы іске қосуға тиесілі.",
   "0 = Monday.": "0 = дүйсенбі.",
   "0 = at the day extreme against the trade (day low for a long).": "0 = мәмілеге қарсы күндік экстремумда (лонг үшін күндік минимум).",

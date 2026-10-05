@@ -427,11 +427,11 @@
         return `<label class="bt-chk${noData ? " nodata" : ""}"><input type="checkbox" data-gametric="${esc(f.id)}" ${on ? "checked" : ""}> ${esc(t(f.label))}</label>`;
       })
       .join("");
-    return `${group("GA settings", rows, t("GA settings"))}${group(
+    return `<fieldset class="bt-controls" ${B.running ? "disabled" : ""}>${group("GA settings", rows, t("GA settings"))}${group(
       "GA metrics",
       `<p class="hint">${esc(t("Metric filters the GA may switch on and set. Fewer metrics = less room to overfit."))}</p><div class="bt-chks">${metrics}</div>`,
       t("Metrics the GA may use"),
-    )}`;
+    )}</fieldset>`;
   }
 
   function convergenceHtml(conv) {
@@ -607,7 +607,7 @@
     }
     const keep = [$("btSettings")?.scrollTop, $("btResults")?.scrollTop];
     body.innerHTML = `<div class="bt-cols">
-      <div class="bt-col" id="btSettings">${settingsHtml()}</div>
+      <div class="bt-col" id="btSettings">${B.running ? `<p class="hint">${esc(t("Settings are locked while a calculation is running."))}</p>` : ""}<fieldset class="bt-controls" ${B.running ? "disabled" : ""}>${settingsHtml()}</fieldset></div>
       <div class="bt-col" id="btResults">${resultsHtml()}</div></div>`;
     if (keep[0]) $("btSettings").scrollTop = keep[0];
     if (keep[1]) $("btResults").scrollTop = keep[1];
@@ -687,6 +687,7 @@
     on("btOptimize", runOptimize);
     on("btValidate", runValidate);
     on("btApply", applyGa);
+    if ($("btApply")) $("btApply").disabled = !!B.running;
     root.querySelectorAll("[data-show]").forEach((b) => (b.onclick = () => enterBacktestView(b.dataset.show)));
     root.querySelectorAll("tr[data-trade]").forEach((tr) => {
       tr.onclick = () => {
@@ -716,7 +717,7 @@
     B.running = kind;
     delete B.errors[kind];
     B.progress = t("Loading history…");
-    renderResults();
+    if (S.panel === "bounce") render();
     const t0 = performance.now();
     try {
       await f();
@@ -775,7 +776,7 @@
   }
 
   function applyGa() {
-    if (!B.opt) return;
+    if (!B.opt || B.running) return;
     B.params = clone(B.opt.report.params);
     save();
     log(t("GA settings applied to the sliders."), "ok");
