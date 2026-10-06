@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use aegis_core::{CheckStatus, ConnectOptions, Connector, Credentials, Timeframe};
+use aegis_core::{broker::TradeRequest, CheckStatus, ConnectOptions, Connector, Credentials, Timeframe};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -113,4 +113,47 @@ async fn missing_python_is_a_failed_check() {
     assert!(conn.is_none());
     assert_eq!(report.checks[0].status, CheckStatus::Fail);
     assert!(report.checks[0].detail.contains("Python was not found"), "{report:?}");
+}
+
+#[tokio::test]
+async fn reads_account_places_confirmed_order_and_closes_owned_position() {
+    let ledger = std::env::temp_dir().join(format!("aegis-mt5-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ledger);
+    std::fs::create_dir_all(&ledger).unwrap();
+    std::env::set_var("AEGIS_TRADE_LEDGER_DIR", &ledger);
+    let (conn, report) = Connector::connect(creds("2", "good"), &options()).await;
+    let conn = conn.unwrap_or_else(|| panic!("connect: {report:?}"));
+    let state = conn.trading_state().await.expect("live account state");
+    assert_eq!(state.account.login, 2);
+    assert!(state.account.trade_allowed);
+    assert_eq!(conn.symbol(), "XAUUSD");
+    let result = conn
+        .place_order(&TradeRequest {
+            request_id: "rust-order-1".into(),
+            side: "long".into(),
+            risk_pct: 1.0,
+            stop: 4291.0,
+            target: 4300.0,
+            max_spread: 2.0,
+            max_positions: 2,
+            daily_loss_limit_pct: 5.0,
+            confirm_real: true,
+        })
+        .await
+        .expect("trade response");
+    assert_eq!(result.status, "filled");
+    let state = conn.trading_state().await.expect("account positions");
+    assert_eq!(state.positions.len(), 1);
+    let ticket = state.positions[0].ticket;
+    let tightened = conn.modify_stop(ticket, 4291.5, None).await.expect("tighten stop");
+    assert_eq!(tightened.status, "filled");
+    let reduced = conn.reduce_position(ticket, 0.5).await.expect("reduce position");
+    assert_eq!(reduced.status, "filled");
+    let closed = conn.close_position(ticket).await.expect("close position");
+    assert_eq!(closed.status, "filled");
+    assert!(conn.close_all().await.unwrap().is_empty());
+    assert!(conn.trading_state().await.unwrap().positions.is_empty());
+    conn.close().await;
+    std::env::remove_var("AEGIS_TRADE_LEDGER_DIR");
+    let _ = std::fs::remove_dir_all(ledger);
 }

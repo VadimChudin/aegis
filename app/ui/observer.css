@@ -66,6 +66,31 @@
   color: var(--ink);
   font: inherit;
 }
+.obs-label select, .obs-label input[type="password"] {
+  width: 100%; min-width: 0; border: 1px solid var(--hair); border-radius: 10px;
+  padding: 9px 10px; outline: none; background: var(--fill); color: var(--ink); font: inherit;
+}
+.obs-label select option { background: var(--select-bg); color: var(--ink); }
+.obs-strategy input[type="range"] { width: 100%; accent-color: var(--accent); }
+.obs-strategy .obs-numbers output { align-self: end; color: var(--ink); font-variant-numeric: tabular-nums; }
+.obs-ai-toggle { margin: 2px 0 12px; color: var(--ink); font-size: 13px; }
+.obs-money-confirm { margin: 12px 0 4px; align-items: flex-start; }
+.obs-money-confirm input { margin-top: 2px; }
+.obs-provider .obs-label { margin: 8px 0; }
+.obs-provider [data-provider-state] { color: var(--muted); font-size: 11px; }
+.obs-diagnostic, .obs-position-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--hair); }
+.obs-diagnostic span, .obs-position-row span { color: var(--muted); overflow-wrap: anywhere; }
+.obs-owned-positions { display: grid; gap: 4px; margin-top: 10px; }
+.obs-strategy-editor > .obs-label { margin: 4px 0 10px; }
+.obs-strategy-editor textarea { min-height: 250px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.obs-strategy-editor textarea:disabled { opacity: .82; }
+.settings-tabs { display: flex; gap: 6px; padding: 5px; margin: 0 0 12px; border: 1px solid var(--hair); border-radius: 13px; background: var(--fill); }
+.settings-tab { flex: 1; min-height: 36px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; font: inherit; cursor: pointer; }
+.settings-tab.on { color: var(--ink); background: var(--seg-on); box-shadow: var(--seg-on-shadow); }
+.settings-local-ai { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--hair); }
+.settings-local-ai > h3 { margin: 0 0 10px; font-size: 14px; }
+.ai-account { min-width: 170px; }
+.ai-account strong { font-size: 11px; white-space: nowrap; }
 .obs-label textarea { resize: vertical; line-height: 1.45; }
 .obs-label textarea:focus, .obs-label input:focus { border-color: var(--apple); box-shadow: 0 0 0 2px color-mix(in srgb, var(--apple) 18%, transparent); }
 .obs-subtitle { display: block; margin: 9px 0 6px; color: var(--muted); font-size: 11px; }

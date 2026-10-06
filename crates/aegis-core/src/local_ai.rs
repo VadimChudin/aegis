@@ -512,9 +512,11 @@ impl Runtime {
         let schema = json!({"type":"object","additionalProperties":false,
             "properties":{
                 "snapshot_id":{"const":snapshot_id},
-                "action":{"type":"string","enum":["wait","long","short"]},
+                "action":{"type":"string","enum":["wait","long","short","close","reduce","stop"]},
                 "reason":{"type":"string","maxLength":160},
                 "stop":{"type":["number","null"]},"target":{"type":["number","null"]},
+                "position_id":{"type":["integer","null"]},
+                "quantity_fraction":{"type":["number","null"]},
                 "used_timeframes":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"string","enum":["1m","5m","15m","1h","4h","1d"]}},
                 "checks":{"type":"array","maxItems":4,"items":{"type":"object","additionalProperties":false,
                     "properties":{"rule":{"type":"string"},"met":{"type":"boolean"},"evidence":{"type":"string","maxLength":80}},

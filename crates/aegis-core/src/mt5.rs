@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    broker::{require, BrokerError, Probe},
+    broker::{require, BrokerError, Probe, TradeRequest, TradeResult, TradingState},
     checks::{Check, Checklist},
     live_market::MarketSample,
     market::{Candle, Timeframe},
@@ -202,6 +202,53 @@ impl Mt5Bridge {
             .validate(crate::sign::now_ms().max(0) as u64)
             .map_err(|e| BrokerError::Parse(format!("MT5 market snapshot: {e}")))?;
         Ok(sample)
+    }
+
+    pub(crate) async fn trading_state(&self) -> Result<TradingState, BrokerError> {
+        let value = self.request(json!({"cmd": "trading_state"}), REQUEST_TIMEOUT).await?;
+        serde_json::from_value(value).map_err(|e| BrokerError::Parse(format!("MT5 trading state: {e}")))
+    }
+
+    pub(crate) async fn place_order(&self, request: &TradeRequest) -> Result<TradeResult, BrokerError> {
+        let mut value =
+            serde_json::to_value(request).map_err(|e| BrokerError::Parse(format!("MT5 trade request: {e}")))?;
+        value["cmd"] = json!("place_order");
+        let result = self.request(value, REQUEST_TIMEOUT).await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 trade result: {e}")))
+    }
+
+    pub(crate) async fn close_position(&self, ticket: u64) -> Result<TradeResult, BrokerError> {
+        self.reduce_position(ticket, 1.0).await
+    }
+
+    pub(crate) async fn close_all(&self) -> Result<Vec<TradeResult>, BrokerError> {
+        let result = self.request(json!({"cmd": "close_all"}), REQUEST_TIMEOUT).await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 close-all result: {e}")))
+    }
+
+    pub(crate) async fn reduce_position(&self, ticket: u64, fraction: f64) -> Result<TradeResult, BrokerError> {
+        let result = self
+            .request(
+                json!({"cmd": "reduce_position", "ticket": ticket, "fraction": fraction}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 reduce result: {e}")))
+    }
+
+    pub(crate) async fn modify_stop(
+        &self,
+        ticket: u64,
+        stop: f64,
+        target: Option<f64>,
+    ) -> Result<TradeResult, BrokerError> {
+        let result = self
+            .request(
+                json!({"cmd": "modify_stop", "ticket": ticket, "stop": stop, "target": target}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 stop update: {e}")))
     }
 
     pub(crate) async fn shutdown(&self) {
