@@ -22,7 +22,9 @@ class Mt5TradingTest(unittest.TestCase):
         self.old_env = os.environ.get("AEGIS_TRADE_LEDGER_DIR")
         os.environ["AEGIS_TRADE_LEDGER_DIR"] = self.temp.name
         fake._state.update(trade_enabled=True, demo=True, hedging=True, positions=[], deals=[],
-                           send_mode="filled", order_checks=0, order_sends=0, close_fail_tickets=set(),
+                           send_mode="filled", order_checks=0, order_sends=0, order_requests=[],
+                           filling_mode=fake.SYMBOL_FILLING_FOK | fake.SYMBOL_FILLING_IOC,
+                           trade_exemode=fake.SYMBOL_TRADE_EXECUTION_MARKET, close_fail_tickets=set(),
                            connected=True, balance=1000.0)
         os.environ["AEGIS_TEST_LIVE_MT5"] = "1"
         self.bridge = Bridge(fake)
@@ -98,6 +100,59 @@ class Mt5TradingTest(unittest.TestCase):
         self.assertEqual(fake._state["order_sends"], 1)
         with self.assertRaisesRegex(BridgeError, "different trade parameters"):
             self.bridge.place_order(self.request(risk_pct=0.4))
+
+    def test_placed_retcode_is_unknown_and_blocks_new_orders(self):
+        fake._state["send_mode"] = "placed"
+        placed = self.bridge.place_order(self.request("placed-order"))
+        self.assertEqual((placed["status"], placed["retcode"]), ("unknown", fake.TRADE_RETCODE_PLACED))
+        self.assertEqual(fake._state["positions"], [])
+        with self.assertRaisesRegex(BridgeError, "outcome is unknown"):
+            self.bridge.place_order(self.request("another-order"))
+        self.assertEqual(fake._state["order_sends"], 1)
+
+    def test_exception_before_order_send_is_rejected_without_poisoning_new_orders(self):
+        original_order_check = fake.order_check
+
+        def failed_check(_request):
+            raise RuntimeError("simulated check API failure")
+
+        fake.order_check = failed_check
+        try:
+            result = self.bridge.place_order(self.request("pre-send-failure"))
+        finally:
+            fake.order_check = original_order_check
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(fake._state["order_sends"], 0)
+        recovered = self.bridge.place_order(self.request("after-pre-send-failure"))
+        self.assertEqual(recovered["status"], "filled")
+        self.assertEqual(fake._state["order_sends"], 1)
+
+        original_order_send = fake.order_send
+
+        def failed_send(_request):
+            fake._state["order_sends"] += 1
+            raise RuntimeError("simulated ambiguous send failure")
+
+        fake.order_send = failed_send
+        try:
+            ambiguous = self.bridge.place_order(self.request("send-failure"))
+        finally:
+            fake.order_send = original_order_send
+        self.assertEqual(ambiguous["status"], "unknown")
+        with self.assertRaisesRegex(BridgeError, "outcome is unknown"):
+            self.bridge.place_order(self.request("after-send-failure"))
+        self.assertEqual(fake._state["order_sends"], 2)
+
+    def test_return_fill_mode_is_used_for_non_market_open_and_close(self):
+        fake._state["filling_mode"] = 0
+        fake._state["trade_exemode"] = fake.SYMBOL_TRADE_EXECUTION_INSTANT
+        opened = self.bridge.place_order(self.request("return-fill-order"))
+        self.assertEqual(opened["status"], "filled")
+        self.assertEqual(fake._state["order_requests"][0]["type_filling"], fake.ORDER_FILLING_RETURN)
+        ticket = fake._state["positions"][0].ticket
+        closed = self.bridge.close_position({"ticket": ticket})
+        self.assertEqual(closed["status"], "filled")
+        self.assertEqual(fake._state["order_requests"][1]["type_filling"], fake.ORDER_FILLING_RETURN)
 
     def test_ambiguous_send_is_persisted_across_bridge_restart_and_blocks_new_orders(self):
         fake._state["send_mode"] = "unknown"

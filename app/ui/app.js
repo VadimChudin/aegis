@@ -308,6 +308,7 @@
     $("statBrokers").textContent = `${connected.length} / ${S.order.length}`;
     $("statChart").textContent = info ? `${info.name} · ${session.symbol}` : "—";
     $("btnBrokers").hidden = connected.length > 0;
+    if (S.positionStop) requestAnimationFrame(S.positionStop);
 
     const empty = (!b || S.chart.error) && !S.btView;
     $("empty").hidden = !empty;
@@ -816,7 +817,24 @@
         log(t("AI stopped; open positions remain protected."), "warn");
       } catch (error) { log(`AI stop failed: ${error}`, "bad"); }
     };
-    document.body.append($("btnAiStop"));
+    const stopButton = $("btnAiStop");
+    const stopSlot = document.createElement("span");
+    stopSlot.className = "stop-slot";
+    stopSlot.setAttribute("aria-hidden", "true");
+    stopButton.replaceWith(stopSlot);
+    document.body.append(stopButton);
+    const positionStop = () => {
+      stopSlot.style.width = `${stopButton.offsetWidth}px`;
+      stopSlot.style.height = `${stopButton.offsetHeight}px`;
+      const rect = stopSlot.getBoundingClientRect();
+      stopButton.style.left = `${rect.left}px`;
+      stopButton.style.top = `${rect.top}px`;
+    };
+    S.positionStop = positionStop;
+    new ResizeObserver(positionStop).observe(document.querySelector(".chrome"));
+    new ResizeObserver(positionStop).observe(stopButton);
+    window.addEventListener("resize", positionStop);
+    positionStop();
     $("sheetClose").onclick = () => openSheet(false);
     $("backdrop").onclick = () => {
       openSheet(false);

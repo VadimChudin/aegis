@@ -122,12 +122,11 @@
 }
  #btnAiStop {
   position: fixed;
-  top: 32px;
-  right: 130px;
   z-index: 100;
   background: var(--panel);
   color: var(--neg);
  }
+ .stop-slot { display: inline-block; flex: none; }
  .position-actions {
   position: fixed;
   right: 24px;
