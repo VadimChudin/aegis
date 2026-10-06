@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0-beta.4 — Technical reliability fixes
+
+- Stop occupies a measured header slot instead of overlapping Brokers, including at minimum
+  window size; it remains clickable above settings. Pending position-close requests stay
+  locked through status polling, and detached settings do not receive UI updates.
+- Stale closed-candle frames and gaps in the recent 21-bar decision window are rejected;
+  fresh quotes no longer make outdated strategy context usable.
+- MT5 accepted-but-unsettled PLACED replies are unknown, not rejected. Exceptions before
+  order_send are rejected without an ambiguous-send lock; failures after dispatch fail closed.
+- RETURN filling is supported for non-Market execution when IOC/FOK is unavailable. Invalid
+  JSON request shapes no longer crash the bridge; raw non-JSON input is not printed to logs.
+- Regression Node tests for repeat closes and foreign-position exclusion now run in CI.
+
 ## 0.7.0-beta.3 — Unified AI / MT5 execution preview
 
 - One Settings → AI tab, five original strategy slots and JSON SPA editors. Editing SPA

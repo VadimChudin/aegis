@@ -419,10 +419,19 @@ class Bridge:
             raise BridgeError("an earlier trade outcome is unknown; new orders are blocked")
         data["entries"][key] = {"payload": digest, "status": "pending"}
         self._save_ledger(data)
+        dispatched = False
+
+        def mark_dispatched():
+            nonlocal dispatched
+            dispatched = True
+
         try:
-            result = operation()
+            result = operation(mark_dispatched)
         except Exception:
-            result = self._trade_result(key, "unknown", -1, "MT5 send outcome is ambiguous; no retry was made")
+            if dispatched:
+                result = self._trade_result(key, "unknown", -1, "MT5 send outcome is ambiguous; no retry was made")
+            else:
+                result = self._trade_result(key, "rejected", -1, "MT5 request failed before order send")
         data["entries"][key] = {"payload": digest, "status": result["status"], "result": result}
         self._save_ledger(data)
         return result
@@ -470,10 +479,22 @@ class Bridge:
             return "filled"
         if retcode == mt5.TRADE_RETCODE_DONE_PARTIAL:
             return "partial"
-        if retcode in (getattr(mt5, "TRADE_RETCODE_TIMEOUT", 10012),
+        if retcode in (getattr(mt5, "TRADE_RETCODE_PLACED", 10008),
+                       getattr(mt5, "TRADE_RETCODE_TIMEOUT", 10012),
                        getattr(mt5, "TRADE_RETCODE_CONNECTION", 10031)):
             return "unknown"
         return "rejected"
+
+    @staticmethod
+    def _fill_mode(mt5, info):
+        allowed = int(info.filling_mode)
+        if allowed & mt5.SYMBOL_FILLING_IOC:
+            return mt5.ORDER_FILLING_IOC
+        if allowed & mt5.SYMBOL_FILLING_FOK:
+            return mt5.ORDER_FILLING_FOK
+        if int(info.trade_exemode) != getattr(mt5, "SYMBOL_TRADE_EXECUTION_MARKET", 2):
+            return mt5.ORDER_FILLING_RETURN
+        raise BridgeError("XAUUSD broker does not advertise IOC or FOK market execution")
 
     def _positions(self, mt5):
         positions = mt5.positions_get(symbol=self.symbol)
@@ -634,12 +655,8 @@ class Bridge:
         aggregate_risk += abs(float(new_risk))
         if aggregate_risk > float(account.equity) * 0.05:
             raise BridgeError("aggregate AEGIS XAUUSD stop risk would exceed the 5% hard limit")
-        allowed = int(info.filling_mode)
-        fill = mt5.ORDER_FILLING_IOC if allowed & mt5.SYMBOL_FILLING_IOC else (
-            mt5.ORDER_FILLING_FOK if allowed & mt5.SYMBOL_FILLING_FOK else None)
-        if fill is None:
-            raise BridgeError("XAUUSD broker does not advertise IOC or FOK market execution")
-        def send():
+        fill = self._fill_mode(mt5, info)
+        def send(mark_dispatched):
             fresh = mt5.symbol_info_tick(self.symbol)
             fresh_time = getattr(fresh, "time_msc", 0) or int(fresh.time) * 1000 if fresh else 0
             if fresh is None or time.time_ns() // 1_000_000 - fresh_time > 10_000:
@@ -733,6 +750,7 @@ class Bridge:
                 ending_notional += float(position.volume) * float(info.trade_contract_size) * float(position.price_current)
             if ending_risk > float(account_end.equity) * 0.05 or ending_notional > float(account_end.equity) * 10:
                 return self._trade_result(request_id, "rejected", -1, "aggregate exposure limits changed before send")
+            mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
                 return self._trade_result(request_id, "unknown", -1, "MT5 order_send returned no result")
@@ -766,7 +784,7 @@ class Bridge:
         fill = self._close_fill(mt5)
         payload = {"ticket": ticket, "volume": float(pos.volume)}
 
-        def send():
+        def send(mark_dispatched):
             current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
             if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
                 return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before close")
@@ -793,6 +811,7 @@ class Bridge:
                     abs(float(verified.volume) - float(pos.volume)) > float(info.volume_step) / 2):
                 return self._trade_result(str(ticket), "rejected", -1, "position changed during broker close check")
             self._trading_permission(mt5, require_usd=False, require_algo=False)
+            mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
                 return self._trade_result(str(ticket), "unknown", -1, "MT5 close outcome is ambiguous", volume_lots=pos.volume)
@@ -805,12 +824,9 @@ class Bridge:
 
     def _close_fill(self, mt5):
         info = mt5.symbol_info(self.symbol)
-        mode = int(info.filling_mode) if info else 0
-        if mode & mt5.SYMBOL_FILLING_IOC:
-            return mt5.ORDER_FILLING_IOC
-        if mode & mt5.SYMBOL_FILLING_FOK:
-            return mt5.ORDER_FILLING_FOK
-        raise BridgeError("XAUUSD broker does not advertise IOC or FOK market execution")
+        if info is None:
+            raise BridgeError("XAUUSD symbol information is unavailable")
+        return self._fill_mode(mt5, info)
 
     def close_all(self, _req):
         if not self.symbol:
@@ -864,7 +880,7 @@ class Bridge:
         price = float(tick.bid if side == mt5.ORDER_TYPE_SELL else tick.ask)
         fill = self._close_fill(mt5)
 
-        def send():
+        def send(mark_dispatched):
             current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
             if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
                 return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before reduce")
@@ -894,6 +910,7 @@ class Bridge:
                     abs(float(verified.volume) - float(pos.volume)) > float(info.volume_step) / 2):
                 return self._trade_result(str(ticket), "rejected", -1, "position changed during broker reduce check")
             self._trading_permission(mt5, require_usd=False, require_algo=False)
+            mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
                 return self._trade_result(str(ticket), "unknown", -1, "MT5 reduce outcome is ambiguous",
@@ -949,7 +966,7 @@ class Bridge:
         if not valid or not tighter or frozen:
             raise BridgeError("stop/target violates XAUUSD stop-distance rules")
 
-        def send():
+        def send(mark_dispatched):
             current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
             if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
                 return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before stop update")
@@ -967,6 +984,7 @@ class Bridge:
                 return self._trade_result(str(ticket), "rejected", getattr(check, "retcode", -1),
                                           getattr(check, "comment", "MT5 stop check failed"))
             self._trading_permission(mt5, require_usd=False, require_algo=False)
+            mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
                 return self._trade_result(str(ticket), "unknown", -1, "MT5 stop update outcome is ambiguous")
@@ -1007,18 +1025,24 @@ def serve(bridge, stdin, stdout):
             try:
                 req = json.loads(line)
             except ValueError:
-                print(f"mt5 bridge: ignoring non-JSON input: {line[:80]}", file=sys.stderr)
+                print("mt5 bridge: ignoring non-JSON input", file=sys.stderr)
                 continue
-            cmd = req.get("cmd")
-            handler = handlers.get(cmd)
+            request_id = req.get("id") if isinstance(req, dict) else None
+            cmd = None
             try:
+                if not isinstance(req, dict):
+                    raise BridgeError("request must be a JSON object")
+                cmd = req.get("cmd")
+                if not isinstance(cmd, str):
+                    raise BridgeError("command must be a string")
+                handler = handlers.get(cmd)
                 if handler is None:
                     raise BridgeError(f"unknown command: {cmd}")
-                reply = {"id": req.get("id"), "ok": True, "result": handler(req)}
+                reply = {"id": request_id, "ok": True, "result": handler(req)}
             except BridgeError as e:
-                reply = {"id": req.get("id"), "ok": False, "error": str(e)}
+                reply = {"id": request_id, "ok": False, "error": str(e)}
             except Exception as e:  # noqa: BLE001 - every failure must reach the app as a reply
-                reply = {"id": req.get("id"), "ok": False, "error": f"{type(e).__name__}: {e}"}
+                reply = {"id": request_id, "ok": False, "error": f"{type(e).__name__}: {e}"}
             stdout.write(json.dumps(reply) + "\n")
             stdout.flush()
             if cmd == "shutdown":

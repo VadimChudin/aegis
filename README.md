@@ -1,5 +1,9 @@
 # AEGIS
 
+**v0.7.0-beta.4 reliability update:** fixes Stop/Brokers overlap, repeated-close UI races,
+stale/gapped strategy history and MT5 reply/filling/error handling. Same execution-preview
+scope and demo acceptance requirements as beta.3; see the changelog for verified changes.
+
 **v0.7.0-beta.3 execution preview:** one Settings → AI tab, JSON SPA for five strategies,
 Paper/Money modes, OpenRouter/Fable5 agreement, MT5 execution and scoped market close controls,
 dynamic account data and position lines. **Windows demo acceptance is required before client

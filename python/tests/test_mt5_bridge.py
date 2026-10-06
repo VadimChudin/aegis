@@ -221,6 +221,15 @@ class BridgeTest(unittest.TestCase):
         serve(Bridge(fake), io.StringIO('garbage\n{"id": 7, "cmd": "nope"}\n'), out)
         self.assertEqual(json.loads(out.getvalue()), {"id": 7, "ok": False, "error": "unknown command: nope"})
 
+    def test_valid_json_with_invalid_request_shape_does_not_crash_bridge(self):
+        out = io.StringIO()
+        serve(Bridge(fake), io.StringIO('[]\nnull\n{"id":8,"cmd":[]}\n{"id":9,"cmd":"hello"}\n'), out)
+        replies = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual(len(replies), 4)
+        self.assertTrue(all(not reply["ok"] for reply in replies[:3]))
+        self.assertTrue(replies[-1]["ok"])
+        self.assertEqual(replies[-1]["id"], 9)
+
     def test_hello_reports_a_missing_package(self):
         bridge = Bridge()
         saved = sys.modules.pop("MetaTrader5", None)

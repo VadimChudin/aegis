@@ -1,5 +1,11 @@
 # AEGIS 0.7.0-beta.3: execution preview and handoff
 
+Reliability update **0.7.0-beta.4** fixes header overlap, repeat-close UI races, stale/gapped
+decision frames, MT5 PLACED/pre-send-error classification, non-Market RETURN filling and
+malformed bridge requests. Execution preview and Windows demo acceptance limits still apply.
+After market-session gaps a timeframe can remain unavailable until 21 contiguous closed
+bars are available; current quotes do not substitute for missing strategy history.
+
 ## What changes
 
 Settings → AI contains the AI switch, RoboForex broker selection, Paper/Money mode, model

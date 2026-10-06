@@ -946,7 +946,10 @@ async fn decision_loop(app: AppHandle) {
                 .status
                 .frames
                 .iter()
-                .filter(|f| inner.config.strictness < 100 || strategy.timeframes.contains(&f.timeframe))
+                .filter(|f| {
+                    f.validate_at(now_ms()).is_ok()
+                        && (inner.config.strictness < 100 || strategy.timeframes.contains(&f.timeframe))
+                })
                 .cloned()
                 .collect();
             if frames.is_empty() {

@@ -19,7 +19,8 @@ ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
 TRADE_ACTION_DEAL, TRADE_ACTION_SLTP, ORDER_TIME_GTC = 1, 6, 0
 ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN = 0, 1, 2
 SYMBOL_FILLING_FOK, SYMBOL_FILLING_IOC = 1, 2
-SYMBOL_TRADE_EXECUTION_MARKET = 2
+SYMBOL_TRADE_EXECUTION_INSTANT, SYMBOL_TRADE_EXECUTION_MARKET = 0, 2
+TRADE_RETCODE_PLACED = 10008
 TRADE_RETCODE_DONE, TRADE_RETCODE_DONE_PARTIAL = 10009, 10010
 TRADE_RETCODE_TIMEOUT, TRADE_RETCODE_CONNECTION = 10012, 10031
 ACCOUNT_TRADE_MODE_DEMO = 0
@@ -41,6 +42,9 @@ _state = {
     "send_mode": "filled",
     "order_checks": 0,
     "order_sends": 0,
+    "order_requests": [],
+    "filling_mode": SYMBOL_FILLING_FOK | SYMBOL_FILLING_IOC,
+    "trade_exemode": SYMBOL_TRADE_EXECUTION_MARKET,
     "close_fail_tickets": set(),
     "account_login": 1,
     "live_symbol": False,
@@ -92,8 +96,8 @@ def symbol_info(name):
     return SimpleNamespace(name=name, spread=30, trade_contract_size=100.0, volume_min=0.01,
                            volume_max=100.0, volume_step=0.01, trade_stops_level=10, point=0.01,
                            trade_freeze_level=_state["freeze_level"],
-                           filling_mode=SYMBOL_FILLING_FOK | SYMBOL_FILLING_IOC,
-                           trade_exemode=SYMBOL_TRADE_EXECUTION_MARKET) if name == expected else None
+                           filling_mode=_state["filling_mode"],
+                           trade_exemode=_state["trade_exemode"]) if name == expected else None
 
 
 def positions_get(symbol=None):
@@ -121,12 +125,16 @@ def order_check(request):
 def order_send(request):
     _state["order_sends"] += 1
     mode = _state["send_mode"]
+    _state["order_requests"].append(dict(request))
     if mode == "unknown":
         return None
+    placed = mode == "placed"
     partial = mode == "partial"
     volume = request.get("volume", 0) / 2 if partial else request.get("volume", 0)
     order, deal = _state["order_sends"], _state["order_sends"] + 1000
-    if "position" in request:
+    if placed:
+        pass
+    elif "position" in request:
         position = next((p for p in _state["positions"] if p.ticket == request["position"]), None)
         if position and request["action"] == TRADE_ACTION_SLTP:
             position.sl, position.tp = request["sl"], request["tp"]
@@ -141,8 +149,9 @@ def order_send(request):
             sl=request["sl"], tp=request["tp"], profit=0.0, magic=request["magic"], comment=request["comment"]))
     default_price = 0.0 if request["action"] == TRADE_ACTION_SLTP else (
         4294.0 if request["type"] == ORDER_TYPE_BUY else 4293.0)
-    retcode = TRADE_RETCODE_TIMEOUT if mode == "timeout" else (
-        TRADE_RETCODE_DONE_PARTIAL if partial else TRADE_RETCODE_DONE)
+    retcode = TRADE_RETCODE_PLACED if placed else (
+        TRADE_RETCODE_TIMEOUT if mode == "timeout" else (
+            TRADE_RETCODE_DONE_PARTIAL if partial else TRADE_RETCODE_DONE))
     return SimpleNamespace(retcode=retcode,
                            comment=mode, order=order, deal=deal, volume=volume,
                            price=request.get("price", default_price))

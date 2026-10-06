@@ -281,6 +281,22 @@ pub struct FrameSummary {
     pub trend: String,
 }
 
+impl FrameSummary {
+    pub fn validate_at(&self, now_ms: u64) -> Result<(), String> {
+        let period = self.timeframe.seconds() as u64 * 1000;
+        if self.closed_at_ms == 0
+            || self.closed_at_ms > now_ms
+            || now_ms - self.closed_at_ms > period + MAX_SAMPLE_AGE_MS
+        {
+            return Err(format!(
+                "{} closed candles are stale or future-dated",
+                self.timeframe.as_str()
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Summarize only bars that have closed by `now_ms`; future and forming bars
 /// are ignored. The resulting levels exclude the latest closed candle.
 pub fn summarize(timeframe: Timeframe, bars: &[Candle], now_ms: u64) -> Result<FrameSummary, String> {
@@ -309,6 +325,16 @@ pub fn summarize(timeframe: Timeframe, bars: &[Candle], now_ms: u64) -> Result<F
     }
     let last_index = closed.len() - 1;
     let last_closed = closed[last_index];
+    let closed_at_ms = (last_closed.time as u64).saturating_add(seconds).saturating_mul(1000);
+    if now_ms.saturating_sub(closed_at_ms) > seconds * 1000 + MAX_SAMPLE_AGE_MS {
+        return Err(format!("{} candle history is stale", timeframe.as_str()));
+    }
+    if closed[last_index - 20..]
+        .windows(2)
+        .any(|pair| pair[1].time - pair[0].time != seconds as i64)
+    {
+        return Err(format!("{} recent candle history contains gaps", timeframe.as_str()));
+    }
     let prior = &closed[last_index - 20..last_index];
     let support = prior.iter().map(|bar| bar.low).fold(f64::INFINITY, f64::min);
     let resistance = prior.iter().map(|bar| bar.high).fold(f64::NEG_INFINITY, f64::max);
@@ -341,7 +367,7 @@ pub fn summarize(timeframe: Timeframe, bars: &[Candle], now_ms: u64) -> Result<F
     .to_owned();
     Ok(FrameSummary {
         timeframe,
-        closed_at_ms: (last_closed.time as u64).saturating_add(seconds).saturating_mul(1000),
+        closed_at_ms,
         last_closed,
         closed_candles: closed[closed.len().saturating_sub(20)..].to_vec(),
         support,
@@ -611,6 +637,12 @@ pub fn validate_decision(
         if !snapshot.frames.iter().any(|frame| frame.timeframe == *timeframe) {
             return Err("decision names a timeframe absent from its snapshot".into());
         }
+        snapshot
+            .frames
+            .iter()
+            .find(|frame| frame.timeframe == *timeframe)
+            .expect("timeframe presence checked")
+            .validate_at(now_ms)?;
     }
     if strategy.id == "data"
         && config.strictness == 100
@@ -1373,6 +1405,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fresh_quotes_do_not_make_old_or_gapped_candle_history_usable() {
+        let base = 1_700_000_000;
+        let bars = candles(24, base);
+        let now = (base as u64 + 24 * 60) * 1000;
+        assert!(summarize(Timeframe::M1, &bars, now).is_ok());
+        assert!(summarize(Timeframe::M1, &bars, now + 3_600_000)
+            .unwrap_err()
+            .contains("stale"));
+        let mut gapped = bars;
+        gapped.remove(12);
+        assert!(summarize(Timeframe::M1, &gapped, now).unwrap_err().contains("gaps"));
+
+        let mut snapshot = snapshot(now);
+        snapshot.frames[0].closed_at_ms = now - 3_600_000;
+        let config = ObserverConfig::default();
+        assert!(validate_decision(
+            &snapshot,
+            &config,
+            config.strategy("density_bounce").unwrap(),
+            &wait_decision(),
+            &sample(now),
+            now
+        )
+        .unwrap_err()
+        .contains("stale"));
+    }
+
     fn wait_decision() -> ModelDecision {
         ModelDecision {
             snapshot_id: 7,
@@ -1555,7 +1615,8 @@ mod tests {
         assert_eq!(result.last_closed.time, 1_700_000_000 + 23 * 60);
         assert!(result.support < result.last_closed.low);
         assert!(summarize(Timeframe::M1, &candles(20, 1_700_000_000), now).is_err());
-        assert!(summarize(Timeframe::M1, &candles(21, 1_700_000_000), now).is_ok());
+        let fresh_minimum_time = (1_700_000_000 + 21 * 60) * 1000 + 30_000;
+        assert!(summarize(Timeframe::M1, &candles(21, 1_700_000_000), fresh_minimum_time).is_ok());
         let forming_only = summarize(Timeframe::M1, &bars[..19], now);
         assert!(forming_only.is_err());
         let mut unordered = bars;

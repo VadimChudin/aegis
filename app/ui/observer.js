@@ -37,6 +37,7 @@
   };
   const STATES = new WeakMap();
   const PRICE_LINES = new Map();
+  let closingPosition = false;
 
   function makeState() {
     return { config: null, saved: null, status: null, loaded: false, busy: false, notice: "", error: "", bound: false, timer: null, loadToken: 0 };
@@ -236,7 +237,8 @@
     if (!box) {
       box=document.createElement("aside");box.id="positionActions";box.className="position-actions glass";
       box.addEventListener("click",async event=>{
-        const button=event.target.closest("button");if(!button)return;
+        const button=event.target.closest("button");if(!button || button.disabled || closingPosition)return;
+        closingPosition=true;
         box.querySelectorAll("button").forEach(b=>b.disabled=true);
         try {
           const result=button.dataset.closeAll ? await invoke("observer_close_all") : await invoke("observer_close",{ticket:Number(button.dataset.ticket)});
@@ -246,7 +248,7 @@
           window.AEGIS.log(text("Position closure confirmed by broker."),"ok");
           syncChartStatus(await invoke("observer_status"));
         } catch(error) {window.AEGIS.log(String(error),"bad");}
-        finally {box.querySelectorAll("button").forEach(b=>b.disabled=false);}
+        finally {closingPosition=false;box.querySelectorAll("button").forEach(b=>b.disabled=false);}
       });
       document.body.append(box);
     }
@@ -255,6 +257,7 @@
     box.hidden=!own.length;
     if(!own.length)return;
     box.innerHTML=`<strong>RoboForex · XAUUSD</strong>${own.map(p=>`<button type="button" class="ghost sm" data-ticket="${esc(p.ticket)}">#${esc(p.ticket)} · ${esc(text("Close position"))}</button>`).join("")}<button type="button" class="ghost sm" data-close-all="yes">${esc(text("Close all AI positions"))}</button>`;
+    box.querySelectorAll("button").forEach(button=>{button.disabled=closingPosition;});
   }
   function phaseLabel(phase, running) {
     if (!phase) return running ? text("running") : text("stopped");
@@ -272,6 +275,7 @@
     return phase;
   }
   function updateStatus(root, state) {
+    if (!root.isConnected) return;
     const status = state.status || {};
     const running = !!status.running;
     const backendBusy = !!status.busy || ["starting", "saving", "stopping", "busy"].includes(status.phase);
@@ -476,6 +480,8 @@
         return;
       }
       if (action === "close-position" || action === "close-all") {
+        if (closingPosition) return;
+        closingPosition=true;
         button.disabled = true;
         try {
           const result = action === "close-position" ? await invoke("observer_close", { ticket: Number(button.dataset.ticket) }) : await invoke("observer_close_all");
@@ -486,7 +492,7 @@
         } catch (error) {
           const node = root.querySelector("[data-action-error]");
           if (node) node.textContent = String(error?.message || error);
-        } finally { button.disabled = false; }
+        } finally { closingPosition=false;button.disabled = false; }
         return;
       }
       if (action === "journal") {
