@@ -336,12 +336,12 @@
         chip.type = "button";
         chip.className = "strategy-chip";
         const strategy = available.get(id);
-        const ready = strategy?.status === "backtest";
+        const ready = S.aiEnabled || strategy?.status === "backtest";
         const title = label;
         chip.className = `strategy-chip${ready ? "" : " soon"}`;
         chip.dataset.strategy = id;
         chip.title = strategy ? (ready ? t(strategy.summary) : `${t(strategy.summary)} ${t("Coming in a later version.")}`) : title;
-        chip.innerHTML = `<span>${esc(t(title))}</span><span class="v-opt-tag">${esc(t(ready ? "backtest" : "soon"))}</span>`;
+        chip.innerHTML = `<span>${esc(t(title))}</span><span class="v-opt-tag">${S.aiEnabled ? "SPA" : esc(t(ready ? "backtest" : "soon"))}</span>`;
         chip.onclick = async () => {
           if (window.AEGIS.observer && await window.AEGIS.observer.isEnabled()) openPanel("observer_strategy", id);
           else if (ready && (id === "bounce" || id === "structural")) openPanel(id);
@@ -731,6 +731,7 @@
     log,
     esc,
     S,
+    refreshStrategies: () => renderStrategies(S.strategies || []),
     chart,
     candles,
     volumes,
@@ -795,6 +796,7 @@
     S.chart.wanted = b.settings.chart_broker;
     applyTheme(b.settings.theme);
     S.strategies = b.strategies;
+    try { S.aiEnabled = !!(await invoke("observer_info")).config.ai_enabled; } catch { S.aiEnabled = false; }
     window.I18N.set(b.settings.lang || window.I18N.detect());
     renderStrategies(b.strategies);
     listenFeed();
@@ -810,11 +812,11 @@
     $("btnMenu").onclick = () => openSheet($("sheet").hidden);
     $("btnAiStop").onclick = async () => {
       try {
-        if (!(await invoke("observer_status")).running) return;
         await invoke("observer_stop");
         log(t("AI stopped; open positions remain protected."), "warn");
       } catch (error) { log(`AI stop failed: ${error}`, "bad"); }
     };
+    document.body.append($("btnAiStop"));
     $("sheetClose").onclick = () => openSheet(false);
     $("backdrop").onclick = () => {
       openSheet(false);

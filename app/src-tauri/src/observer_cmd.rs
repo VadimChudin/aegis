@@ -618,8 +618,17 @@ pub async fn observer_close(app: AppHandle, state: State<'_, ObserverState>, tic
         .iter()
         .any(|p| p.ticket == ticket && p.magic == 26070552 && p.symbol == "XAUUSD");
     if known_live || mode == "money" {
-        let result = conn.close_position(ticket).await.map_err(|e| e.to_string())?;
+        let mut result = conn.close_position(ticket).await.map_err(|e| e.to_string())?;
         let current = conn.trading_state().await.map_err(|e| e.to_string());
+        if result.status == "filled"
+            && current
+                .as_ref()
+                .map_or(true, |s| s.positions.iter().any(|p| p.ticket == ticket))
+        {
+            result.status = "unknown".into();
+            result.message =
+                "Broker position remains open after close acknowledgement; reconcile MT5 before retrying".into();
+        }
         let mut inner = state.inner.lock().await;
         inner.status.account = current.ok();
         journal(
@@ -678,8 +687,29 @@ pub async fn observer_close_all(app: AppHandle, state: State<'_, ObserverState>)
     }
     let _execution = state.execution.lock().await;
     let conn = connector(&app.state::<AppState>()).await?;
-    let result = conn.close_all().await.map_err(|e| e.to_string())?;
+    let mut result = conn.close_all().await.map_err(|e| e.to_string())?;
     let current = conn.trading_state().await.map_err(|e| e.to_string());
+    if let Ok(current) = &current {
+        for outcome in &mut result {
+            if outcome.status == "filled"
+                && outcome
+                    .request_id
+                    .parse::<u64>()
+                    .ok()
+                    .is_some_and(|id| current.positions.iter().any(|p| p.ticket == id))
+            {
+                outcome.status = "unknown".into();
+                outcome.message = "Position is still reported open; inspect MT5".into();
+            }
+        }
+    } else {
+        for outcome in &mut result {
+            if outcome.status == "filled" {
+                outcome.status = "unknown".into();
+                outcome.message = "Fresh position reconciliation unavailable; inspect MT5".into();
+            }
+        }
+    }
     let mut inner = state.inner.lock().await;
     inner.status.account = current.ok();
     journal(

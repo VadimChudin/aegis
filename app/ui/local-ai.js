@@ -8,7 +8,7 @@
   const DICT = {
     ru: {
       "Local AI": "Модель",
-      "Private, on-device model tools. Live trading is not part of this step.": "Приватные инструменты модели на вашем устройстве. Живая торговля не входит в этот этап.",
+      "Private, on-device model tools. Live trading is not part of this step.": "Модель выполняет анализ. Исполнение ордеров контролируется выбранным режимом торговли.",
       "Model status": "Статус модели",
       "Checking local model…": "Проверяем локальную модель…",
       "Retry status": "Повторить проверку",

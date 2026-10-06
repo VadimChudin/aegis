@@ -3,11 +3,6 @@
   const A = window.AEGIS;
   if (!A) return;
   const { invoke, esc, S } = A;
-  const stopButton=document.getElementById("btnAiStop");
-  if(stopButton) stopButton.onclick=async()=>{
-    try{await Promise.all([invoke("ai_stop"),invoke("observer_stop")]);A.log("AI: новые решения остановлены; текущая симуляция остаётся под защитой", "ok");}
-    catch(error){A.log(`Не удалось остановить AI: ${String(error)}`,"bad");}
-  };
   const fields = [
     { id: "local_url", label: "Адрес локальной модели", type: "url", placeholder: "http://127.0.0.1:11434" },
     { id: "local_model", label: "Локальная модель", placeholder: "qwen3:8b" },

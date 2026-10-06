@@ -10,6 +10,8 @@ Bounce, Structural reversal, Liquidity Sweep, DATA and Breakout. With AI enabled
 position protection is not removed. Existing free-text settings migrate into this JSON form.
 
 Each strategy has its own risk percent and daily-loss limit. Live position count is bounded;
+the selected strategy's count gate limits total XAUUSD exposure, and its daily-loss gate
+checks symbol-wide realised/floating loss rather than a separate strategy sub-account.
 Paper currently has one position total, so its position-count control is inactive. Adherence
 0–100 influences model interpretation; 100 also checks canonical conditions mechanically.
 No slider can guarantee exact natural-language adherence or future trading accuracy. A valid
@@ -78,3 +80,21 @@ This blocks **client deployment / real-money acceptance**, not merging the previ
 Never describe the preview as certified live trading or guaranteed profitable. No model-weight
 training is included. Previous beta.2 remains available as the observation-only rollback;
 preserve the new settings key and broker-side protective orders during rollback.
+Beta.2 cannot decrypt settings re-encrypted with the new random key: use a pre-upgrade backup
+or enter credentials again in an isolated config directory. Never erase trade-intent ledgers
+as part of rollback or retry.
+
+## Verification for this build
+
+- 141 Rust workspace tests, 42 Python tests without skips, Clippy/fmt and JS syntax passed.
+- MT5 fake-terminal integration exercised entry, lot/risk sizing, attached stops, tightening,
+  reduction, close, close-all, partial/rejected/unknown responses and no blind retry.
+- OpenRouter transport tests used a local HTTP fixture: fixed model, auth headers, bounded
+  responses, JSON parsing, truncation/error rejection and redacted failures. No paid key was used.
+- Native Tauri and installed `.deb`: five original strategies, every SPA editor, risk/day-loss
+  persistence, timeframe synchronization, dynamic balance/equity and owned position lines.
+  One/all close buttons removed owned positions while preserving an external test position.
+- Readiness diagnostics got an actual Qwen response, measured MT5 latency and reported the
+  missing provider key honestly; no diagnostic order was sent. Restart kept SPA/mode but did
+  not re-arm Money or start trading.
+- Multi-hour soak, physical GPU, real Fable call and real Windows MT5 execution remain unverified.

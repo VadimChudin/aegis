@@ -201,6 +201,7 @@
     return `${metrics}${list}`;
   }
   function syncChartStatus(status) {
+    syncQuickPositions(status);
     const chart = window.AEGIS?.S?.chart;
     const series = window.AEGIS?.candles;
     if (!chart || !series) return;
@@ -229,6 +230,31 @@
     for (const [key, line] of PRICE_LINES) {
       if (!wanted.has(key)) { series.removePriceLine(line.handle); PRICE_LINES.delete(key); }
     }
+  }
+  function syncQuickPositions(status) {
+    let box=document.getElementById("positionActions");
+    if (!box) {
+      box=document.createElement("aside");box.id="positionActions";box.className="position-actions glass";
+      box.addEventListener("click",async event=>{
+        const button=event.target.closest("button");if(!button)return;
+        box.querySelectorAll("button").forEach(b=>b.disabled=true);
+        try {
+          const result=button.dataset.closeAll ? await invoke("observer_close_all") : await invoke("observer_close",{ticket:Number(button.dataset.ticket)});
+          const outcomes=Array.isArray(result)?result:[result];
+          const failures=outcomes.filter(r=>r.status && r.status!=="filled");
+          if(failures.length)throw new Error(failures.map(r=>`${r.status}: ${r.message}`).join("; "));
+          window.AEGIS.log(text("Position closure confirmed by broker."),"ok");
+          syncChartStatus(await invoke("observer_status"));
+        } catch(error) {window.AEGIS.log(String(error),"bad");}
+        finally {box.querySelectorAll("button").forEach(b=>b.disabled=false);}
+      });
+      document.body.append(box);
+    }
+    const own=(status?.account?.positions||[]).filter(p=>p.magic===26070552&&p.symbol==="XAUUSD");
+    if(status?.position)own.push({...status.position,ticket:status.position.id});
+    box.hidden=!own.length;
+    if(!own.length)return;
+    box.innerHTML=`<strong>RoboForex · XAUUSD</strong>${own.map(p=>`<button type="button" class="ghost sm" data-ticket="${esc(p.ticket)}">#${esc(p.ticket)} · ${esc(text("Close position"))}</button>`).join("")}<button type="button" class="ghost sm" data-close-all="yes">${esc(text("Close all AI positions"))}</button>`;
   }
   function phaseLabel(phase, running) {
     if (!phase) return running ? text("running") : text("stopped");
@@ -260,7 +286,7 @@
     if (stateNode) stateNode.innerHTML = `<span class="obs-status-dot ${running ? "is-running" : ""}"></span><strong>${esc(phase)}</strong>${statusError ? `<span class="obs-status-error">${esc(statusError)}</span>` : ""}`;
     const action = root.querySelector('[data-action="run"]');
     if (action) {
-      action.textContent = running ? text("stop") : text("start");
+      action.textContent = running ? text("stop") : text(state.config?.mode === "money" ? "Start Money trading" : "Start Paper trading");
       action.dataset.run = running ? "stop" : "start";
       action.classList.toggle("is-stop", running);
       action.disabled = !running && ((busy && !running) || !state.loaded || !state.config?.ai_enabled || (state.config?.mode === "money" && !status.money_armed));
@@ -361,6 +387,8 @@
     try {
       const config = await invoke("observer_save", { config: state.config });
       state.config = cfgFrom(config);
+      window.AEGIS.S.aiEnabled=state.config.ai_enabled;
+      window.AEGIS.refreshStrategies?.();
       state.saved = clone(state.config);
       if (state.config.mode === "money") state.status = await invoke("observer_arm_money", { confirmed: true });
       else state.status = await invoke("observer_arm_money", { confirmed: false }).catch(() => state.status);
@@ -510,6 +538,8 @@
       const config = cfgFrom(info.config);
       state.defaults = info.defaults ? cfgFrom(info.defaults) : clone(DEFAULTS);
       state.config = config;
+      window.AEGIS.S.aiEnabled=config.ai_enabled;
+      window.AEGIS.refreshStrategies?.();
       state.saved = clone(config);
       state.status = info.status || null;
       state.loaded = true;

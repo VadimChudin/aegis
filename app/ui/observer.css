@@ -120,3 +120,25 @@
   .obs-numbers, .obs-metrics, .obs-frame-summaries { grid-template-columns: minmax(0, 1fr); }
   .obs-heading { align-items: flex-start; }
 }
+ #btnAiStop {
+  position: fixed;
+  top: 32px;
+  right: 130px;
+  z-index: 100;
+  background: var(--panel);
+  color: var(--neg);
+ }
+ .position-actions {
+  position: fixed;
+  right: 24px;
+  bottom: 120px;
+  z-index: 90;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--panel);
+ }
+ .position-actions[hidden] { display: none; }
