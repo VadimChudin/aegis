@@ -413,8 +413,8 @@ class Bridge:
                 self._save_ledger(data)
             return old["result"]
         if key.startswith("open:") and any(
-            entry.get("status") in ("pending", "unknown") and ledger_key.startswith("open:")
-            for ledger_key, entry in data["entries"].items()
+            entry.get("status") in ("pending", "unknown")
+            for entry in data["entries"].values()
         ):
             raise BridgeError("an earlier trade outcome is unknown; new orders are blocked")
         data["entries"][key] = {"payload": digest, "status": "pending"}

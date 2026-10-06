@@ -65,6 +65,20 @@ class Mt5TradingTest(unittest.TestCase):
         self.assertEqual(fake._state["order_sends"], sends)
         self.assertEqual(self.bridge.trading_state({})["positions"], [])
 
+    def test_unknown_close_blocks_new_entries_without_retrying_close(self):
+        self.bridge.place_order(self.request())
+        ticket=self.bridge.trading_state({})["positions"][0]["ticket"]
+        fake._state["send_mode"]="unknown"
+        result=self.bridge.close_position({"ticket":ticket})
+        self.assertEqual(result["status"],"unknown")
+        sends=fake._state["order_sends"]
+        self.bridge.close_position({"ticket":ticket})
+        self.assertEqual(fake._state["order_sends"],sends)
+        fake._state["send_mode"]="filled"
+        with self.assertRaisesRegex(BridgeError,"outcome is unknown"):
+            self.bridge.place_order(self.request(request_id="after-unknown-close"))
+        self.assertEqual(fake._state["order_sends"],sends)
+
     def test_explicit_confirmation_permissions_and_risk_rounding_are_required(self):
         with self.assertRaisesRegex(BridgeError, "confirm_real"):
             self.bridge.place_order(self.request(confirm_real=False))
