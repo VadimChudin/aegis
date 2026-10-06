@@ -14,6 +14,8 @@ use crate::{
     sign::now_ms,
 };
 
+pub use crate::trading::{AccountState, BrokerPosition, TradeRequest, TradeResult, TradingState};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BrokerId {
@@ -440,6 +442,66 @@ impl Connector {
             Connector::Roboforex(c) => c.market_sample().await,
             _ => Err(BrokerError::Input(
                 "market snapshots are only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Reads current RoboForex account metrics and XAUUSD positions.
+    pub async fn trading_state(&self) -> Result<TradingState, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.trading_state().await,
+            _ => Err(BrokerError::Input(
+                "account trading state is only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Places one explicitly confirmed, risk-sized RoboForex XAUUSD market order.
+    pub async fn place_order(&self, request: &TradeRequest) -> Result<TradeResult, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.place_order(request).await,
+            _ => Err(BrokerError::Input(
+                "real orders are only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Closes one AEGIS-owned XAUUSD position by MT5 ticket.
+    pub async fn close_position(&self, ticket: u64) -> Result<TradeResult, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.close_position(ticket).await,
+            _ => Err(BrokerError::Input(
+                "position closing is only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Closes each currently open AEGIS-owned XAUUSD position independently.
+    pub async fn close_all(&self) -> Result<Vec<TradeResult>, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.close_all().await,
+            _ => Err(BrokerError::Input(
+                "close-all is only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Reduces an AEGIS-owned XAUUSD position by a fraction of its current volume.
+    pub async fn reduce_position(&self, ticket: u64, fraction: f64) -> Result<TradeResult, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.reduce_position(ticket, fraction).await,
+            _ => Err(BrokerError::Input(
+                "position reduction is only supported for RoboForex MT5".into(),
+            )),
+        }
+    }
+
+    /// Updates the stop loss and optionally the take profit on an AEGIS-owned position.
+    pub async fn modify_stop(&self, ticket: u64, stop: f64, target: Option<f64>) -> Result<TradeResult, BrokerError> {
+        match self {
+            Connector::Roboforex(c) => c.modify_stop(ticket, stop, target).await,
+            _ => Err(BrokerError::Input(
+                "stop updates are only supported for RoboForex MT5".into(),
             )),
         }
     }

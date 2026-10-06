@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod ai_memory;
+pub mod ai_provider;
 pub mod bounce;
 pub mod broker;
 pub mod checks;
@@ -15,6 +16,7 @@ pub mod observer;
 pub mod settings;
 pub mod strategy;
 pub mod structural;
+pub mod trading;
 
 mod binance;
 mod bybit;

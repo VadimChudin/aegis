@@ -14,6 +14,16 @@ TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME
 BOOK_TYPE_BUY, BOOK_TYPE_SELL, BOOK_TYPE_BUY_MARKET, BOOK_TYPE_SELL_MARKET = 1, 2, 3, 4
 COPY_TICKS_ALL = -1
 SERVER_OFFSET = 0
+POSITION_TYPE_BUY, POSITION_TYPE_SELL = 0, 1
+ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
+TRADE_ACTION_DEAL, TRADE_ACTION_SLTP, ORDER_TIME_GTC = 1, 6, 0
+ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN = 0, 1, 2
+SYMBOL_FILLING_FOK, SYMBOL_FILLING_IOC = 1, 2
+SYMBOL_TRADE_EXECUTION_MARKET = 2
+TRADE_RETCODE_DONE, TRADE_RETCODE_DONE_PARTIAL = 10009, 10010
+TRADE_RETCODE_TIMEOUT, TRADE_RETCODE_CONNECTION = 10012, 10031
+ACCOUNT_TRADE_MODE_DEMO = 0
+ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
 
 _state = {
     "logged_in": False,
@@ -23,12 +33,28 @@ _state = {
     "book_releases": 0,
     "connected": True,
     "quote_age_seconds": 0,
+    "trade_enabled": False,
+    "demo": True,
+    "hedging": True,
+    "positions": [],
+    "deals": [],
+    "send_mode": "filled",
+    "order_checks": 0,
+    "order_sends": 0,
+    "close_fail_tickets": set(),
+    "account_login": 1,
+    "live_symbol": False,
+    "balance": 1000.0,
+    "freeze_level": 0,
 }
 
 
 def initialize(path=None, login=None, password=None, server=None, timeout=None):
-    if login == 1 and password == "good":
+    if login in (1, 2) and password == "good":
         _state["logged_in"] = True
+        _state["account_login"] = login
+        _state["live_symbol"] = login == 2
+        _state["trade_enabled"] = login == 2
         return True
     _state["error"] = (-6, "Terminal: Authorization failed")
     return False
@@ -43,25 +69,87 @@ def last_error():
 
 
 def account_info():
-    return SimpleNamespace(login=1, server="RoboForex-ECN", currency="USD", balance=1000.0, trade_allowed=True,
-                           trade_expert=True)
+    profit = sum(p.profit for p in _state["positions"])
+    balance = float(_state["balance"])
+    return SimpleNamespace(login=_state["account_login"], server="RoboForex-ECN", currency="USD", balance=balance, equity=balance + profit,
+                           profit=profit, margin=0.0, margin_free=balance + profit, trade_allowed=True,
+                           trade_expert=True, trade_mode=ACCOUNT_TRADE_MODE_DEMO if _state["demo"] else 1,
+                           margin_mode=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING if _state["hedging"] else 0)
 
 
 def terminal_info():
-    return SimpleNamespace(connected=_state["connected"], trade_allowed=False, company="RoboForex Ltd", build=5120)
+    return SimpleNamespace(connected=_state["connected"], trade_allowed=_state["trade_enabled"],
+                           company="RoboForex Ltd", build=5120)
 
 
 def symbols_get(group=None):
-    return (SimpleNamespace(name="XAUUSD" if os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"),)
+    live = _state["live_symbol"] or os.getenv("AEGIS_TEST_LIVE_MT5") == "1"
+    return (SimpleNamespace(name="XAUUSD" if live else "XAUUSD.r"),)
 
 
 def symbol_info(name):
-    expected = "XAUUSD" if os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
-    return SimpleNamespace(name=name, spread=30) if name == expected else None
+    expected = "XAUUSD" if _state["live_symbol"] or os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
+    return SimpleNamespace(name=name, spread=30, trade_contract_size=100.0, volume_min=0.01,
+                           volume_max=100.0, volume_step=0.01, trade_stops_level=10, point=0.01,
+                           trade_freeze_level=_state["freeze_level"],
+                           filling_mode=SYMBOL_FILLING_FOK | SYMBOL_FILLING_IOC,
+                           trade_exemode=SYMBOL_TRADE_EXECUTION_MARKET) if name == expected else None
+
+
+def positions_get(symbol=None):
+    if symbol is None:
+        return tuple(_state["positions"])
+    return tuple(p for p in _state["positions"] if p.symbol == symbol)
+
+
+def history_deals_get(start, end):
+    return tuple(_state["deals"])
+
+
+def order_calc_profit(order_type, symbol, volume, price_open, price_close):
+    direction = 1 if order_type == ORDER_TYPE_BUY else -1
+    return (price_close - price_open) * 100.0 * volume * direction
+
+
+def order_check(request):
+    _state["order_checks"] += 1
+    if request.get("position") in _state["close_fail_tickets"]:
+        return SimpleNamespace(retcode=10016, comment="close check rejected")
+    return SimpleNamespace(retcode=0, comment="done")
+
+
+def order_send(request):
+    _state["order_sends"] += 1
+    mode = _state["send_mode"]
+    if mode == "unknown":
+        return None
+    partial = mode == "partial"
+    volume = request.get("volume", 0) / 2 if partial else request.get("volume", 0)
+    order, deal = _state["order_sends"], _state["order_sends"] + 1000
+    if "position" in request:
+        position = next((p for p in _state["positions"] if p.ticket == request["position"]), None)
+        if position and request["action"] == TRADE_ACTION_SLTP:
+            position.sl, position.tp = request["sl"], request["tp"]
+        elif position and volume >= position.volume:
+            _state["positions"].remove(position)
+        elif position:
+            position.volume -= volume
+    elif request["action"] == TRADE_ACTION_DEAL:
+        price = request.get("price", 4294.0 if request["type"] == ORDER_TYPE_BUY else 4293.0)
+        _state["positions"].append(SimpleNamespace(ticket=order, symbol=request["symbol"],
+            type=request["type"], volume=volume, price_open=price, price_current=price,
+            sl=request["sl"], tp=request["tp"], profit=0.0, magic=request["magic"], comment=request["comment"]))
+    default_price = 0.0 if request["action"] == TRADE_ACTION_SLTP else (
+        4294.0 if request["type"] == ORDER_TYPE_BUY else 4293.0)
+    retcode = TRADE_RETCODE_TIMEOUT if mode == "timeout" else (
+        TRADE_RETCODE_DONE_PARTIAL if partial else TRADE_RETCODE_DONE)
+    return SimpleNamespace(retcode=retcode,
+                           comment=mode, order=order, deal=deal, volume=volume,
+                           price=request.get("price", default_price))
 
 
 def symbol_select(name, enable):
-    expected = "XAUUSD" if os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
+    expected = "XAUUSD" if _state["live_symbol"] or os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
     return name == expected
 
 
@@ -100,7 +188,7 @@ def copy_rates_from_pos(symbol, timeframe, start, count):
 
 
 def market_book_add(symbol):
-    expected = "XAUUSD" if os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
+    expected = "XAUUSD" if _state["live_symbol"] or os.getenv("AEGIS_TEST_LIVE_MT5") == "1" else "XAUUSD.r"
     if not _state["logged_in"] or not _state["book_supported"] or os.getenv("AEGIS_TEST_NO_BOOK") == "1" or symbol != expected:
         _state["error"] = (-1, "Market depth is not supported")
         return False

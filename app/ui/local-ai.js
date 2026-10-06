@@ -7,8 +7,8 @@
 
   const DICT = {
     ru: {
-      "Local AI": "Локальный ИИ",
-      "Private, on-device model tools. Live trading is not part of this step.": "Приватные инструменты модели на вашем устройстве. Живая торговля не входит в этот этап.",
+      "Local AI": "Модель",
+      "Private, on-device model tools. Live trading is not part of this step.": "Модель выполняет анализ. Исполнение ордеров контролируется выбранным режимом торговли.",
       "Model status": "Статус модели",
       "Checking local model…": "Проверяем локальную модель…",
       "Retry status": "Повторить проверку",
@@ -78,7 +78,7 @@
       "No local server": "Локальный сервер не запущен",
     },
     kk: {
-      "Local AI": "Жергілікті ЖИ",
+      "Local AI": "Модель",
       "Private, on-device model tools. Live trading is not part of this step.": "Құрылғыдағы жеке модель құралдары. Нақты сауда бұл кезеңге кірмейді.",
       "Model status": "Модель күйі",
       "Checking local model…": "Жергілікті модель тексерілуде…",
@@ -151,10 +151,10 @@
   };
 
   const state = { status: null, statusError: "", operationError: "", action: "", answer: "", memoriesUsed: 0, elapsedMs: null, memories: [], timer: null, polling: false };
-  const t = (text) => (DICT[window.I18N?.lang] && DICT[window.I18N.lang][text]) || text;
+  const t = (text) => (DICT[window.I18N?.lang] && DICT[window.I18N.lang][text]) || (text === "Local AI" ? "Model" : text);
   const $ = (root, selector) => root.querySelector(selector);
   const asError = (error) => String(error?.message || error).replace(/^Error:\s*/, "");
-  const isPanelReady = (container) => container.isConnected && S.panel === "local_ai" && Boolean($(container, "[data-lai-status]"));
+  const isPanelReady = (container) => container.isConnected && ["local_ai","ai_settings","theme"].includes(S.panel) && Boolean($(container, "[data-lai-status]"));
 
   function statusMarkup() {
     return `<section class="lai-card" aria-labelledby="lai-status-title">
@@ -458,7 +458,7 @@
     loadMemories(container);
     if (state.timer) clearInterval(state.timer);
     state.timer = setInterval(() => {
-      if (S.panel !== "local_ai" || !container.isConnected) {
+      if (!["local_ai","ai_settings","theme"].includes(S.panel) || !container.isConnected) {
         clearInterval(state.timer);
         state.timer = null;
         return;

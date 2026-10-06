@@ -1,5 +1,10 @@
 # AEGIS
 
+**v0.7.0-beta.3 execution preview:** one Settings → AI tab, JSON SPA for five strategies,
+Paper/Money modes, OpenRouter/Fable5 agreement, MT5 execution and scoped market close controls,
+dynamic account data and position lines. **Windows demo acceptance is required before client
+or real-money use.** See [`docs/ai-execution-preview.md`](docs/ai-execution-preview.md).
+
 **v0.7.0-beta.2:** RoboForex MT5/XAUUSD autonomous AI observer, four configurable strategy
 prompts, 0–100 adherence, optional DOM fallback and automatic simulated decision/outcome
 journaling. **No real orders or model-weight training.** Setup and exact limits:

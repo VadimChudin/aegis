@@ -12,10 +12,16 @@ exits when stdin closes, so it never outlives the app.
 """
 
 import json
+import hashlib
 import math
+import os
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
+from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 PROTOCOL = 1
 TIMEFRAMES = {
@@ -28,6 +34,8 @@ TIMEFRAMES = {
 }
 MAX_BARS = 5000
 MAX_TICKS = 256
+MAGIC = 26070552
+TRADE_SYMBOL = "XAUUSD"
 
 
 class BridgeError(Exception):
@@ -39,6 +47,7 @@ class Bridge:
         self._mt5 = mt5
         self.symbol = None
         self.offset = 0
+        self._ledger_path = None
 
     def mt5(self):
         if self._mt5 is None:
@@ -77,6 +86,9 @@ class Bridge:
         self.symbol = self._find_symbol(mt5)
         self.offset = self._server_offset(mt5)
         info = mt5.account_info()
+        identity = f"{info.login}:{info.server}" if info else str(kwargs["login"])
+        root = Path(os.environ.get("AEGIS_TRADE_LEDGER_DIR", Path.home() / ".aegis" / "trade-ledger"))
+        self._ledger_path = root / (hashlib.sha256(identity.encode()).hexdigest() + ".json")
         account = (
             f"{info.login} · {info.server} · {info.currency} {info.balance:.2f}" if info else f"{kwargs['login']}"
         )
@@ -292,6 +304,679 @@ class Bridge:
             "volume_kind": "mt5_ticks_not_exchange_tape",
         }
 
+    def _ledger(self):
+        if self._ledger_path is None:
+            raise BridgeError("not connected")
+        try:
+            with self._ledger_path.open("r", encoding="utf-8") as stream:
+                data = json.load(stream)
+            entries = data.get("entries") if isinstance(data, dict) else None
+            if (not isinstance(data, dict) or type(data.get("version")) is not int or
+                    data["version"] != 1 or not isinstance(entries, dict)):
+                raise ValueError("invalid ledger structure")
+            for key, entry in entries.items():
+                if (not isinstance(key, str) or not isinstance(entry, dict) or
+                        not isinstance(entry.get("payload"), str) or
+                        entry.get("status") not in ("pending", "unknown", "filled", "partial", "rejected") or
+                        (entry["status"] not in ("pending", "unknown") and not isinstance(entry.get("result"), dict))):
+                    raise ValueError("invalid ledger entry")
+            return data
+        except FileNotFoundError:
+            return {"version": 1, "entries": {}}
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise BridgeError(f"trade ledger unavailable or corrupt ({type(exc).__name__})") from None
+
+    def _save_ledger(self, data):
+        path = self._ledger_path
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.name != "nt":
+                os.chmod(path.parent, 0o700)
+            fd, temp_name = tempfile.mkstemp(prefix=".trade-", dir=path.parent)
+            try:
+                if os.name != "nt":
+                    os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(data, stream, separators=(",", ":"), allow_nan=False)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, path)
+                if os.name != "nt":
+                    directory_fd = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+        except (OSError, ValueError) as exc:
+            raise BridgeError(f"trade ledger could not be saved ({type(exc).__name__})") from None
+
+    @contextmanager
+    def _ledger_lock(self):
+        if self._ledger_path is None:
+            raise BridgeError("not connected")
+        lock = None
+        try:
+            self._ledger_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            lock = open(self._ledger_path.with_suffix(".lock"), "a+b")
+            if os.name != "nt":
+                os.chmod(self._ledger_path.with_suffix(".lock"), 0o600)
+            if os.name == "nt":
+                import msvcrt
+
+                lock.seek(0, os.SEEK_END)
+                if lock.tell() == 0:
+                    lock.write(b"0")
+                    lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            if lock is not None:
+                lock.close()
+            raise BridgeError(f"trade ledger lock unavailable ({type(exc).__name__})") from None
+        try:
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock.close()
+
+    def _run_once(self, key, payload, operation):
+        with self._ledger_lock():
+            return self._run_once_locked(key, payload, operation)
+
+    def _run_once_locked(self, key, payload, operation):
+        data = self._ledger()
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        old = data["entries"].get(key)
+        if old:
+            if old.get("payload") != digest:
+                raise BridgeError("request id already used with different trade parameters")
+            if old.get("status") == "pending":
+                old["status"] = "unknown"
+                old["result"] = self._trade_result(key, "unknown", -1, "previous send outcome is ambiguous")
+                self._save_ledger(data)
+            return old["result"]
+        if key.startswith("open:") and any(
+            entry.get("status") in ("pending", "unknown")
+            for entry in data["entries"].values()
+        ):
+            raise BridgeError("an earlier trade outcome is unknown; new orders are blocked")
+        data["entries"][key] = {"payload": digest, "status": "pending"}
+        self._save_ledger(data)
+        try:
+            result = operation()
+        except Exception:
+            result = self._trade_result(key, "unknown", -1, "MT5 send outcome is ambiguous; no retry was made")
+        data["entries"][key] = {"payload": digest, "status": result["status"], "result": result}
+        self._save_ledger(data)
+        return result
+
+    def _cached_result(self, key, payload):
+        data = self._ledger()
+        old = data["entries"].get(key)
+        if old is None:
+            return None
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if old.get("payload") != digest:
+            raise BridgeError("request id already used with different trade parameters")
+        if old.get("status") == "pending":
+            old["status"] = "unknown"
+            old["result"] = self._trade_result(key, "unknown", -1, "previous send outcome is ambiguous")
+            self._save_ledger(data)
+        return old.get("result")
+
+    def _cached_close(self, ticket):
+        prefix = "close:" + str(ticket) + ":"
+        data = self._ledger()
+        attempts = sorted((key for key in data["entries"] if key.startswith(prefix)),
+                          key=lambda key: int(key[len(prefix):]))
+        if not attempts:
+            return prefix + "0", None
+        key = attempts[-1]
+        old = data["entries"][key]
+        if old.get("status") == "pending":
+            old["status"] = "unknown"
+            old["result"] = self._trade_result(str(ticket), "unknown", -1, "previous close outcome is ambiguous")
+            self._save_ledger(data)
+        if old.get("status") in ("rejected", "partial"):
+            return prefix + str(int(key[len(prefix):]) + 1), None
+        return key, old.get("result")
+
+    @staticmethod
+    def _trade_result(request_id, status, retcode, message, **fields):
+        return {"request_id": str(request_id), "status": status, "retcode": int(retcode), "message": str(message),
+                "order": int(fields.get("order", 0) or 0), "deal": int(fields.get("deal", 0) or 0),
+                "volume_lots": float(fields.get("volume_lots", 0) or 0), "price": float(fields.get("price", 0) or 0)}
+
+    @staticmethod
+    def _send_status(mt5, retcode):
+        if retcode == mt5.TRADE_RETCODE_DONE:
+            return "filled"
+        if retcode == mt5.TRADE_RETCODE_DONE_PARTIAL:
+            return "partial"
+        if retcode in (getattr(mt5, "TRADE_RETCODE_TIMEOUT", 10012),
+                       getattr(mt5, "TRADE_RETCODE_CONNECTION", 10031)):
+            return "unknown"
+        return "rejected"
+
+    def _positions(self, mt5):
+        positions = mt5.positions_get(symbol=self.symbol)
+        if positions is None:
+            raise BridgeError("MT5 could not confirm current XAUUSD positions")
+        return positions
+
+    @staticmethod
+    def _ticket(req):
+        ticket = req.get("ticket")
+        if type(ticket) is not int or ticket <= 0:
+            raise BridgeError("ticket must be a positive integer")
+        return ticket
+
+    def trading_state(self, _req):
+        if not self.symbol:
+            raise BridgeError("not connected")
+        mt5 = self.mt5()
+        account, info, terminal = mt5.account_info(), mt5.symbol_info(self.symbol), mt5.terminal_info()
+        if account is None or info is None:
+            raise BridgeError("MT5 account or symbol information is unavailable")
+        positions = []
+        for pos in self._positions(mt5):
+            positions.append({"ticket": int(pos.ticket), "symbol": str(pos.symbol),
+                              "side": "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
+                              "volume_lots": float(pos.volume), "quantity_oz": float(pos.volume * info.trade_contract_size),
+                              "entry": float(pos.price_open), "current": float(pos.price_current),
+                              "stop": float(pos.sl), "target": float(pos.tp), "profit": float(pos.profit),
+                              "magic": int(pos.magic), "comment": str(pos.comment)})
+        margin_mode = getattr(account, "margin_mode", -1)
+        return {"account": {"login": int(account.login), "server": str(account.server),
+                            "currency": str(account.currency), "balance": float(account.balance),
+                            "equity": float(account.equity), "profit": float(account.profit),
+                            "margin": float(account.margin), "margin_free": float(account.margin_free),
+                            "trade_allowed": bool(terminal and terminal.connected and terminal.trade_allowed and
+                                                   account.trade_allowed and account.trade_expert),
+                            "demo": bool(account.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO),
+                            "time_ms": time.time_ns() // 1_000_000},
+                "positions": positions, "contract_size": float(info.trade_contract_size),
+                "volume_min": float(info.volume_min), "volume_max": float(info.volume_max),
+                "volume_step": float(info.volume_step),
+                "hedging": margin_mode == mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING}
+
+    def _trading_permission(self, mt5, require_usd=True, require_algo=True):
+        terminal, account = mt5.terminal_info(), mt5.account_info()
+        if terminal is None or not terminal.connected:
+            raise BridgeError("MT5 terminal is disconnected")
+        if account is None or not account.trade_allowed or not account.trade_expert:
+            raise BridgeError("MT5 account trading is not allowed")
+        if require_algo and not terminal.trade_allowed:
+            raise BridgeError("MT5 automated trading is not enabled for this terminal/account")
+        if self.symbol != TRADE_SYMBOL:
+            raise BridgeError("automated trading requires the exact XAUUSD symbol")
+        if require_usd and account.currency != "USD":
+            raise BridgeError("automated risk sizing currently requires a USD account")
+        return account
+
+    def place_order(self, req):
+        mt5 = self.mt5()
+        request_id = str(req.get("request_id", "")).strip()
+        if not request_id or len(request_id) > 128:
+            raise BridgeError("request_id must contain 1 to 128 characters")
+        side = str(req.get("side", "")).upper()
+        side = {"LONG": "BUY", "SHORT": "SELL"}.get(side, side)
+        try:
+            risk_pct, stop, target = (float(req[k]) for k in ("risk_pct", "stop", "target"))
+            max_spread = float(req["max_spread"])
+            slots, loss_limit = int(req["max_positions"]), float(req["daily_loss_limit_pct"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise BridgeError("invalid trade request fields") from None
+        if side not in ("BUY", "SELL") or not all(math.isfinite(v) for v in (risk_pct, stop, target, max_spread, loss_limit)):
+            raise BridgeError("invalid trade side or non-finite trade parameter")
+        if not 0 < risk_pct <= 1 or not 0 < loss_limit <= 10 or max_spread <= 0 or not 1 <= slots <= 5:
+            raise BridgeError("risk, loss limit, spread or position limit is outside safe bounds")
+        if req.get("confirm_real") is not True:
+            raise BridgeError("explicit confirm_real=true is required for every order")
+        payload = {"side": side, "risk_pct": risk_pct, "stop": stop, "target": target,
+                   "max_spread": max_spread, "max_positions": slots, "daily_loss_limit_pct": loss_limit}
+        cached = self._cached_result("open:" + request_id, payload)
+        if cached is not None:
+            return cached
+        account = self._trading_permission(mt5)
+        info, tick = mt5.symbol_info(self.symbol), mt5.symbol_info_tick(self.symbol)
+        if tick is None or info is None:
+            raise BridgeError("XAUUSD quote or contract information is unavailable")
+        contract_data = (float(info.trade_contract_size), float(info.volume_min), float(info.volume_max),
+                         float(info.volume_step), float(info.point), float(account.equity), float(account.balance))
+        if (not all(math.isfinite(value) and value > 0 for value in contract_data) or
+                contract_data[1] > contract_data[2] or contract_data[3] > contract_data[2]):
+            raise BridgeError("XAUUSD contract or account risk data is invalid")
+        stamp = getattr(tick, "time_msc", 0) or int(tick.time) * 1000
+        now_ms = time.time_ns() // 1_000_000
+        if stamp <= 0 or now_ms - stamp > 10_000 or stamp - now_ms > 2_000:
+            raise BridgeError("XAUUSD quote is stale")
+        bid, ask = float(tick.bid), float(tick.ask)
+        if not all(math.isfinite(v) and v > 0 for v in (bid, ask)) or ask < bid or ask - bid > max_spread:
+            raise BridgeError("XAUUSD spread or quote is invalid/exceeds max_spread")
+        entry = ask if side == "BUY" else bid
+        distance = max(float(info.trade_stops_level) * float(info.point), float(info.point))
+
+        def valid_stops(current_bid, current_ask):
+            if side == "BUY":
+                return 0 < stop <= current_bid - distance and target >= current_ask + distance
+            return stop >= current_ask + distance and 0 < target <= current_bid - distance
+
+        if not valid_stops(bid, ask):
+            raise BridgeError(f"{side} stop/target violates XAUUSD stop-distance rules")
+        positions = self._positions(mt5)
+        hedging = getattr(account, "margin_mode", -1) == mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
+        if not hedging and positions:
+            raise BridgeError("netting account has existing XAUUSD exposure; automated order refused")
+        if any(int(p.magic) != MAGIC for p in positions):
+            raise BridgeError("XAUUSD has an externally owned position; automated order refused")
+        if len(positions) >= slots:
+            raise BridgeError("maximum XAUUSD position count reached")
+        current_notional = sum(float(p.volume) * float(info.trade_contract_size) * float(p.price_current)
+                               for p in positions if int(p.magic) == MAGIC)
+        exposure_room = float(account.equity) * 10 - current_notional
+        if exposure_room <= 0:
+            raise BridgeError("maximum aggregate XAUUSD notional exposure reached")
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        history = mt5.history_deals_get(today, datetime.now(timezone.utc))
+        if history is None:
+            raise BridgeError("MT5 could not confirm today's XAUUSD profit and loss")
+        daily_profit = sum(float(d.profit) + float(getattr(d, "commission", 0)) + float(getattr(d, "swap", 0))
+                           for d in history if d.symbol == self.symbol)
+        daily_profit += sum(float(p.profit) for p in positions if int(p.magic) == MAGIC)
+        if loss_limit and daily_profit <= -(float(account.balance) * loss_limit / 100):
+            raise BridgeError("daily loss limit reached")
+        per_lot = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                                        self.symbol, 1.0, entry, stop)
+        if per_lot is None or not math.isfinite(float(per_lot)) or float(per_lot) >= 0:
+            raise BridgeError("broker could not calculate a positive stop-loss risk")
+        risk_money = float(account.equity) * risk_pct / 100
+        raw_lots = risk_money / abs(float(per_lot))
+        cap_lots = exposure_room / (float(info.trade_contract_size) * entry)
+        raw_lots = min(raw_lots, cap_lots, float(info.volume_max))
+        step, minimum = Decimal(str(info.volume_step)), Decimal(str(info.volume_min))
+        lots = (Decimal(str(raw_lots)) / step).to_integral_value(rounding=ROUND_DOWN) * step
+        if lots < minimum:
+            raise BridgeError("risk-based volume is below broker minimum; refusing to round risk up")
+        aggregate_risk = 0.0
+        for position in positions:
+            if int(position.magic) != MAGIC:
+                continue
+            if not math.isfinite(float(position.sl)) or float(position.sl) <= 0:
+                raise BridgeError("existing AEGIS XAUUSD position has no stop; new risk is blocked")
+            position_type = mt5.ORDER_TYPE_BUY if position.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL
+            position_risk = mt5.order_calc_profit(position_type, self.symbol, float(position.volume),
+                                                  float(position.price_open), float(position.sl))
+            if position_risk is None or not math.isfinite(float(position_risk)):
+                raise BridgeError("broker could not calculate existing position risk")
+            aggregate_risk += max(0.0, -float(position_risk))
+        new_risk = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                                         self.symbol, float(lots), entry, stop)
+        if new_risk is None or not math.isfinite(float(new_risk)) or float(new_risk) >= 0:
+            raise BridgeError("broker could not validate aggregate stop risk")
+        aggregate_risk += abs(float(new_risk))
+        if aggregate_risk > float(account.equity) * 0.05:
+            raise BridgeError("aggregate AEGIS XAUUSD stop risk would exceed the 5% hard limit")
+        allowed = int(info.filling_mode)
+        fill = mt5.ORDER_FILLING_IOC if allowed & mt5.SYMBOL_FILLING_IOC else (
+            mt5.ORDER_FILLING_FOK if allowed & mt5.SYMBOL_FILLING_FOK else None)
+        if fill is None:
+            raise BridgeError("XAUUSD broker does not advertise IOC or FOK market execution")
+        def send():
+            fresh = mt5.symbol_info_tick(self.symbol)
+            fresh_time = getattr(fresh, "time_msc", 0) or int(fresh.time) * 1000 if fresh else 0
+            if fresh is None or time.time_ns() // 1_000_000 - fresh_time > 10_000:
+                return self._trade_result(request_id, "rejected", -1, "quote became stale before order check")
+            price = float(fresh.ask if side == "BUY" else fresh.bid)
+            if (not math.isfinite(float(fresh.bid)) or not math.isfinite(float(fresh.ask)) or
+                    float(fresh.ask) < float(fresh.bid) or float(fresh.ask) - float(fresh.bid) > max_spread or
+                    not valid_stops(float(fresh.bid), float(fresh.ask))):
+                return self._trade_result(request_id, "rejected", -1, "spread or stop constraints changed before send")
+            order = {"action": mt5.TRADE_ACTION_DEAL, "symbol": self.symbol, "volume": float(lots),
+                     "type": mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                     "price": price, "sl": stop, "tp": target, "deviation": 20, "magic": MAGIC,
+                     "comment": "AEGIS XAUUSD", "type_time": mt5.ORDER_TIME_GTC, "type_filling": fill}
+            if int(getattr(info, "trade_exemode", -1)) == getattr(mt5, "SYMBOL_TRADE_EXECUTION_MARKET", 2):
+                order.pop("price")
+            check = mt5.order_check(order)
+            if check is None or int(check.retcode) != 0:
+                return self._trade_result(request_id, "rejected", getattr(check, "retcode", -1),
+                                          getattr(check, "comment", "MT5 order_check failed"))
+            account_now = self._trading_permission(mt5)
+            final_tick = mt5.symbol_info_tick(self.symbol)
+            final_time = getattr(final_tick, "time_msc", 0) or int(final_tick.time) * 1000 if final_tick else 0
+            if final_tick is None or time.time_ns() // 1_000_000 - final_time > 10_000:
+                return self._trade_result(request_id, "rejected", -1, "quote became stale after order check")
+            final_bid, final_ask = float(final_tick.bid), float(final_tick.ask)
+            if (not math.isfinite(final_bid) or not math.isfinite(final_ask) or final_bid <= 0 or
+                    final_ask < final_bid or final_ask - final_bid > max_spread or
+                    not valid_stops(final_bid, final_ask)):
+                return self._trade_result(request_id, "rejected", -1, "spread or stop constraints changed after order check")
+            positions_now = self._positions(mt5)
+            hedging_now = getattr(account_now, "margin_mode", -1) == mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
+            if ((not hedging_now and positions_now) or
+                    any(int(p.magic) != MAGIC for p in positions_now) or len(positions_now) >= slots):
+                return self._trade_result(request_id, "rejected", -1, "XAUUSD position limits changed before send")
+            notional_now = sum(float(p.volume) * float(info.trade_contract_size) * float(p.price_current)
+                               for p in positions_now if int(p.magic) == MAGIC)
+            if notional_now + float(lots) * float(info.trade_contract_size) * final_ask > float(account_now.equity) * 10:
+                return self._trade_result(request_id, "rejected", -1, "aggregate XAUUSD notional limit changed before send")
+            final_price = final_ask if side == "BUY" else final_bid
+            final_risk = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                                               self.symbol, float(lots), final_price, stop)
+            if (final_risk is None or not math.isfinite(float(final_risk)) or float(final_risk) >= 0 or
+                    abs(float(final_risk)) > float(account_now.equity) * risk_pct / 100):
+                return self._trade_result(request_id, "rejected", -1, "risk limit changed before send")
+            live_risk = abs(float(final_risk))
+            for position in positions_now:
+                position_risk = mt5.order_calc_profit(
+                    mt5.ORDER_TYPE_BUY if position.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL,
+                    self.symbol, float(position.volume), float(position.price_open), float(position.sl))
+                if position_risk is None or not math.isfinite(float(position_risk)):
+                    return self._trade_result(request_id, "rejected", -1, "existing stop risk became unavailable")
+                live_risk += max(0.0, -float(position_risk))
+            if live_risk > float(account_now.equity) * 0.05:
+                return self._trade_result(request_id, "rejected", -1, "aggregate AEGIS stop risk exceeds the 5% hard limit")
+            if "price" in order:
+                order["price"] = final_price
+            final_check = mt5.order_check(order)
+            if final_check is None or int(final_check.retcode) != 0:
+                return self._trade_result(request_id, "rejected", getattr(final_check, "retcode", -1),
+                                          getattr(final_check, "comment", "MT5 final order_check failed"))
+            last_tick = mt5.symbol_info_tick(self.symbol)
+            last_time = getattr(last_tick, "time_msc", 0) or int(last_tick.time) * 1000 if last_tick else 0
+            if (last_tick is None or time.time_ns() // 1_000_000 - last_time > 10_000 or
+                    abs(float(last_tick.bid) - final_bid) > float(info.point) or
+                    abs(float(last_tick.ask) - final_ask) > float(info.point)):
+                return self._trade_result(request_id, "rejected", -1, "quote moved during final broker check")
+            account_end = self._trading_permission(mt5)
+            last_bid, last_ask = float(last_tick.bid), float(last_tick.ask)
+            if not valid_stops(last_bid, last_ask) or last_ask - last_bid > max_spread:
+                return self._trade_result(request_id, "rejected", -1, "trade limits changed during final broker check")
+            positions_end = self._positions(mt5)
+            hedging_end = getattr(account_end, "margin_mode", -1) == mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
+            if ((not hedging_end and positions_end) or any(int(p.magic) != MAGIC for p in positions_end) or
+                    len(positions_end) >= slots):
+                return self._trade_result(request_id, "rejected", -1, "XAUUSD position limits changed during final check")
+            end_price = last_ask if side == "BUY" else last_bid
+            end_risk = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                                             self.symbol, float(lots), end_price, stop)
+            if (end_risk is None or not math.isfinite(float(end_risk)) or float(end_risk) >= 0 or
+                    abs(float(end_risk)) > float(account_end.equity) * risk_pct / 100):
+                return self._trade_result(request_id, "rejected", -1, "risk limit changed during final broker check")
+            ending_risk = abs(float(end_risk))
+            ending_notional = float(lots) * float(info.trade_contract_size) * end_price
+            for position in positions_end:
+                position_risk = mt5.order_calc_profit(
+                    mt5.ORDER_TYPE_BUY if position.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL,
+                    self.symbol, float(position.volume), float(position.price_open), float(position.sl))
+                if position_risk is None or not math.isfinite(float(position_risk)):
+                    return self._trade_result(request_id, "rejected", -1, "existing stop risk became unavailable")
+                ending_risk += max(0.0, -float(position_risk))
+                ending_notional += float(position.volume) * float(info.trade_contract_size) * float(position.price_current)
+            if ending_risk > float(account_end.equity) * 0.05 or ending_notional > float(account_end.equity) * 10:
+                return self._trade_result(request_id, "rejected", -1, "aggregate exposure limits changed before send")
+            result = mt5.order_send(order)
+            if result is None:
+                return self._trade_result(request_id, "unknown", -1, "MT5 order_send returned no result")
+            code = int(result.retcode)
+            status = self._send_status(mt5, code)
+            return self._trade_result(request_id, status, code, result.comment, order=result.order, deal=result.deal,
+                                      volume_lots=result.volume, price=result.price)
+
+        return self._run_once("open:" + request_id, payload, send)
+
+    def close_position(self, req):
+        ticket = self._ticket(req)
+        return self.reduce_position({"ticket": ticket, "fraction": 1.0})
+
+    def _close_position_full(self, req):
+        ticket = self._ticket(req)
+        close_key, cached = self._cached_close(ticket)
+        if cached is not None:
+            return cached
+        mt5 = self.mt5()
+        self._trading_permission(mt5, require_usd=False, require_algo=False)
+        pos = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+        if pos is None or int(pos.magic) != MAGIC or pos.symbol != TRADE_SYMBOL:
+            raise BridgeError("position is absent or not owned by AEGIS for exact XAUUSD")
+        tick = mt5.symbol_info_tick(self.symbol)
+        stamp = getattr(tick, "time_msc", 0) or int(tick.time) * 1000 if tick else 0
+        if tick is None or time.time_ns() // 1_000_000 - stamp > 10_000:
+            raise BridgeError("XAUUSD quote is stale or unavailable")
+        side = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = float(tick.bid if side == mt5.ORDER_TYPE_SELL else tick.ask)
+        fill = self._close_fill(mt5)
+        payload = {"ticket": ticket, "volume": float(pos.volume)}
+
+        def send():
+            current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+            if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
+                return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before close")
+            if abs(float(current.volume) - float(pos.volume)) > float(mt5.symbol_info(self.symbol).volume_step) / 2:
+                return self._trade_result(str(ticket), "rejected", -1, "position volume changed before close")
+            fresh_tick = mt5.symbol_info_tick(self.symbol)
+            fresh_stamp = getattr(fresh_tick, "time_msc", 0) or int(fresh_tick.time) * 1000 if fresh_tick else 0
+            if fresh_tick is None or time.time_ns() // 1_000_000 - fresh_stamp > 10_000:
+                return self._trade_result(str(ticket), "rejected", -1, "XAUUSD quote became stale before close")
+            fresh_price = float(fresh_tick.bid if side == mt5.ORDER_TYPE_SELL else fresh_tick.ask)
+            order = {"action": mt5.TRADE_ACTION_DEAL, "position": ticket, "symbol": self.symbol,
+                     "volume": float(pos.volume), "type": side, "price": fresh_price, "deviation": 20,
+                     "magic": MAGIC, "comment": "AEGIS close", "type_time": mt5.ORDER_TIME_GTC,
+                     "type_filling": fill}
+            info = mt5.symbol_info(self.symbol)
+            if int(getattr(info, "trade_exemode", -1)) == getattr(mt5, "SYMBOL_TRADE_EXECUTION_MARKET", 2):
+                order.pop("price")
+            check = mt5.order_check(order)
+            if check is None or int(check.retcode) != 0:
+                return self._trade_result(str(ticket), "rejected", getattr(check, "retcode", -1),
+                                          getattr(check, "comment", "MT5 order_check failed"), volume_lots=pos.volume)
+            verified = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+            if (verified is None or int(verified.magic) != MAGIC or verified.symbol != TRADE_SYMBOL or
+                    abs(float(verified.volume) - float(pos.volume)) > float(info.volume_step) / 2):
+                return self._trade_result(str(ticket), "rejected", -1, "position changed during broker close check")
+            self._trading_permission(mt5, require_usd=False, require_algo=False)
+            result = mt5.order_send(order)
+            if result is None:
+                return self._trade_result(str(ticket), "unknown", -1, "MT5 close outcome is ambiguous", volume_lots=pos.volume)
+            code = int(result.retcode)
+            status = self._send_status(mt5, code)
+            return self._trade_result(str(ticket), status, code, result.comment, order=result.order, deal=result.deal,
+                                      volume_lots=result.volume, price=result.price)
+
+        return self._run_once(close_key, payload, send)
+
+    def _close_fill(self, mt5):
+        info = mt5.symbol_info(self.symbol)
+        mode = int(info.filling_mode) if info else 0
+        if mode & mt5.SYMBOL_FILLING_IOC:
+            return mt5.ORDER_FILLING_IOC
+        if mode & mt5.SYMBOL_FILLING_FOK:
+            return mt5.ORDER_FILLING_FOK
+        raise BridgeError("XAUUSD broker does not advertise IOC or FOK market execution")
+
+    def close_all(self, _req):
+        if not self.symbol:
+            raise BridgeError("not connected")
+        mt5 = self.mt5()
+        owned = [int(p.ticket) for p in self._positions(mt5)
+                 if int(p.magic) == MAGIC and p.symbol == TRADE_SYMBOL]
+        outcomes = []
+        for ticket in owned:
+            try:
+                outcomes.append(self.close_position({"ticket": ticket}))
+            except BridgeError as exc:
+                outcomes.append(self._trade_result(str(ticket), "rejected", -1, str(exc)))
+            except Exception:
+                outcomes.append(self._trade_result(str(ticket), "unknown", -1, "close outcome is ambiguous"))
+        return outcomes
+
+    def reduce_position(self, req):
+        try:
+            ticket, fraction = self._ticket(req), float(req["fraction"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise BridgeError("ticket and reduction fraction are required") from None
+        if not math.isfinite(fraction) or not 0 < fraction <= 1:
+            raise BridgeError("reduction fraction must be greater than zero and no greater than one")
+        if fraction == 1:
+            return self._close_position_full({"ticket": ticket})
+        fraction_text = format(fraction, ".12g")
+        key = f"reduce:{ticket}:{fraction_text}"
+        payload = {"ticket": ticket, "fraction": fraction}
+        cached = self._cached_result(key, payload)
+        if cached is not None:
+            return cached
+        mt5 = self.mt5()
+        self._trading_permission(mt5, require_usd=False, require_algo=False)
+        pos = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+        if pos is None or int(pos.magic) != MAGIC or pos.symbol != TRADE_SYMBOL:
+            raise BridgeError("position is absent or not owned by AEGIS for exact XAUUSD")
+        info = mt5.symbol_info(self.symbol)
+        step, minimum = Decimal(str(info.volume_step)), Decimal(str(info.volume_min))
+        amount = (Decimal(str(pos.volume)) * Decimal(str(fraction)) / step).to_integral_value(rounding=ROUND_DOWN) * step
+        remainder = Decimal(str(pos.volume)) - amount
+        if remainder < minimum:
+            return self._close_position_full({"ticket": ticket})
+        if amount < minimum:
+            raise BridgeError("reduction amount is below broker minimum volume")
+        tick = mt5.symbol_info_tick(self.symbol)
+        stamp = getattr(tick, "time_msc", 0) or int(tick.time) * 1000 if tick else 0
+        if tick is None or time.time_ns() // 1_000_000 - stamp > 10_000:
+            raise BridgeError("XAUUSD quote is stale")
+        side = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = float(tick.bid if side == mt5.ORDER_TYPE_SELL else tick.ask)
+        fill = self._close_fill(mt5)
+
+        def send():
+            current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+            if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
+                return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before reduce")
+            if abs(float(current.volume) - float(pos.volume)) > float(info.volume_step) / 2:
+                return self._trade_result(str(ticket), "rejected", -1, "position volume changed before reduce")
+            fresh = mt5.symbol_info_tick(self.symbol)
+            fresh_stamp = getattr(fresh, "time_msc", 0) or int(fresh.time) * 1000 if fresh else 0
+            if fresh is None or time.time_ns() // 1_000_000 - fresh_stamp > 10_000:
+                return self._trade_result(str(ticket), "rejected", -1, "XAUUSD quote became stale before reduce")
+            order = {"action": mt5.TRADE_ACTION_DEAL, "position": ticket, "symbol": self.symbol,
+                     "volume": float(amount), "type": side, "price": price, "deviation": 20,
+                     "magic": MAGIC, "comment": "AEGIS reduce", "type_time": mt5.ORDER_TIME_GTC,
+                     "type_filling": fill}
+            if int(getattr(info, "trade_exemode", -1)) == getattr(mt5, "SYMBOL_TRADE_EXECUTION_MARKET", 2):
+                order.pop("price")
+            check = mt5.order_check(order)
+            if check is None or int(check.retcode) != 0:
+                return self._trade_result(str(ticket), "rejected", getattr(check, "retcode", -1),
+                                          getattr(check, "comment", "MT5 reduce check failed"), volume_lots=float(amount))
+            self._trading_permission(mt5, require_usd=False, require_algo=False)
+            after_check = mt5.symbol_info_tick(self.symbol)
+            after_stamp = getattr(after_check, "time_msc", 0) or int(after_check.time) * 1000 if after_check else 0
+            if after_check is None or time.time_ns() // 1_000_000 - after_stamp > 10_000:
+                return self._trade_result(str(ticket), "rejected", -1, "XAUUSD quote became stale after reduce check")
+            verified = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+            if (verified is None or int(verified.magic) != MAGIC or verified.symbol != TRADE_SYMBOL or
+                    abs(float(verified.volume) - float(pos.volume)) > float(info.volume_step) / 2):
+                return self._trade_result(str(ticket), "rejected", -1, "position changed during broker reduce check")
+            self._trading_permission(mt5, require_usd=False, require_algo=False)
+            result = mt5.order_send(order)
+            if result is None:
+                return self._trade_result(str(ticket), "unknown", -1, "MT5 reduce outcome is ambiguous",
+                                          volume_lots=float(amount))
+            code = int(result.retcode)
+            status = self._send_status(mt5, code)
+            return self._trade_result(str(ticket), status, code, result.comment, order=result.order, deal=result.deal,
+                                      volume_lots=result.volume, price=result.price)
+
+        return self._run_once(key, payload, send)
+
+    def modify_stop(self, req):
+        try:
+            ticket, stop = self._ticket(req), float(req["stop"])
+            target_value = req.get("target")
+            target_value = float(target_value) if target_value is not None else None
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise BridgeError("ticket and stop price are required") from None
+        if not math.isfinite(stop) or (target_value is not None and not math.isfinite(target_value)):
+            raise BridgeError("stop or target price is not finite")
+        mt5 = self.mt5()
+        self._trading_permission(mt5, require_usd=False, require_algo=False)
+        pos = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+        if pos is None or int(pos.magic) != MAGIC or pos.symbol != TRADE_SYMBOL:
+            raise BridgeError("position is absent or not owned by AEGIS for exact XAUUSD")
+        target = float(pos.tp) if target_value is None else target_value
+        key = "modify:" + hashlib.sha256(f"{ticket}:{stop:.12g}:{target:.12g}".encode()).hexdigest()
+        payload = {"ticket": ticket, "stop": stop, "target": target}
+        cached = self._cached_result(key, payload)
+        if cached is not None:
+            return cached
+        info, tick = mt5.symbol_info(self.symbol), mt5.symbol_info_tick(self.symbol)
+        stamp = getattr(tick, "time_msc", 0) or int(tick.time) * 1000 if tick else 0
+        if tick is None or time.time_ns() // 1_000_000 - stamp > 10_000:
+            raise BridgeError("XAUUSD quote is stale")
+        bid, ask = float(tick.bid), float(tick.ask)
+        distance = max(float(info.trade_stops_level) * float(info.point), float(info.point))
+        freeze_distance = float(getattr(info, "trade_freeze_level", 0)) * float(info.point)
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            valid = 0 < stop <= bid - distance and (target == 0 or target >= ask + distance)
+            tighter = float(pos.sl) <= 0 or stop >= float(pos.sl)
+            frozen = (abs(bid - stop) <= freeze_distance or
+                      (float(pos.sl) > 0 and abs(bid - float(pos.sl)) <= freeze_distance) or
+                      (target > 0 and abs(ask - target) <= freeze_distance) or
+                      (float(pos.tp) > 0 and abs(ask - float(pos.tp)) <= freeze_distance))
+        else:
+            valid = stop >= ask + distance and (target == 0 or 0 < target <= bid - distance)
+            tighter = float(pos.sl) <= 0 or stop <= float(pos.sl)
+            frozen = (abs(ask - stop) <= freeze_distance or
+                      (float(pos.sl) > 0 and abs(ask - float(pos.sl)) <= freeze_distance) or
+                      (target > 0 and abs(bid - target) <= freeze_distance) or
+                      (float(pos.tp) > 0 and abs(bid - float(pos.tp)) <= freeze_distance))
+        if not valid or not tighter or frozen:
+            raise BridgeError("stop/target violates XAUUSD stop-distance rules")
+
+        def send():
+            current = next((p for p in self._positions(mt5) if int(p.ticket) == ticket), None)
+            if current is None or int(current.magic) != MAGIC or current.symbol != TRADE_SYMBOL:
+                return self._trade_result(str(ticket), "rejected", -1, "position ownership changed before stop update")
+            if float(current.sl) > 0 and ((current.type == mt5.POSITION_TYPE_BUY and stop < current.sl) or
+                                         (current.type == mt5.POSITION_TYPE_SELL and stop > current.sl)):
+                return self._trade_result(str(ticket), "rejected", -1, "stop may not be widened")
+            fresh = mt5.symbol_info_tick(self.symbol)
+            fresh_stamp = getattr(fresh, "time_msc", 0) or int(fresh.time) * 1000 if fresh else 0
+            if fresh is None or time.time_ns() // 1_000_000 - fresh_stamp > 10_000:
+                return self._trade_result(str(ticket), "rejected", -1, "XAUUSD quote became stale before stop update")
+            order = {"action": mt5.TRADE_ACTION_SLTP, "position": ticket, "symbol": self.symbol,
+                     "sl": stop, "tp": target}
+            check = mt5.order_check(order)
+            if check is None or int(check.retcode) != 0:
+                return self._trade_result(str(ticket), "rejected", getattr(check, "retcode", -1),
+                                          getattr(check, "comment", "MT5 stop check failed"))
+            self._trading_permission(mt5, require_usd=False, require_algo=False)
+            result = mt5.order_send(order)
+            if result is None:
+                return self._trade_result(str(ticket), "unknown", -1, "MT5 stop update outcome is ambiguous")
+            code = int(result.retcode)
+            status = self._send_status(mt5, code)
+            return self._trade_result(str(ticket), status, code, result.comment, order=result.order, deal=result.deal,
+                                      volume_lots=result.volume, price=result.price)
+
+        return self._run_once(key, payload, send)
+
     def shutdown(self, _req=None):
         if self._mt5 is not None:
             self._mt5.shutdown()
@@ -306,6 +991,12 @@ def serve(bridge, stdin, stdout):
         "candles": bridge.candles,
         "order_book": bridge.order_book,
         "market_snapshot": bridge.market_snapshot,
+        "trading_state": bridge.trading_state,
+        "place_order": bridge.place_order,
+        "close_position": bridge.close_position,
+        "close_all": bridge.close_all,
+        "reduce_position": bridge.reduce_position,
+        "modify_stop": bridge.modify_stop,
         "shutdown": bridge.shutdown,
     }
     try:

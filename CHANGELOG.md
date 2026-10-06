@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0-beta.3 — Unified AI / MT5 execution preview
+
+- One Settings → AI tab, five original strategy slots and JSON SPA editors. Editing SPA
+  stops new decisions; per-strategy risk and daily-loss settings persist independently.
+- Explicit session-only Money confirmation, Paper default, fixed Fable5 OpenRouter consultation
+  and agreement on all executable parameters. No application spend budget; requests remain
+  size/deadline/concurrency bounded and provider diagnostics are billable and opt-in.
+- MT5 account balance/equity/free margin/profit and owned XAUUSD positions, chart entry/SL/TP
+  lines, market close/close-all, partial reductions and tightening stops. Scoped to AEGIS magic.
+- Broker lot sizing, order_check, stop distances, permissions, margin and risk gates; durable
+  account-scoped execution intent prevents blind retries after uncertain/partial outcomes.
+- Stop/Save execution barrier, account-bound Money arming, random installation encryption key
+  with legacy credential migration, bounded chart/log buffers and non-overlapping status polling.
+- Live execution is implemented but NOT validated on a real RoboForex Windows account. This
+  preview requires Windows demo acceptance before client deployment; no profitability guarantee.
+
 ## 0.7.0-beta.2 — RoboForex AI Observer
 
 - Autonomous, read-only RoboForex MT5 `XAUUSD` observation with independent quote sampling,
