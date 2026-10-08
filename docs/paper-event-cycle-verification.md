@@ -16,14 +16,14 @@
 Включениеevent_paper_enabled=false по умолчанию; окноevent_window_hours=2 (2/3/10); event_cloud_calls_per_hour=5 (1..60); event_cooldown_seconds=300 (30..86400). Дополнительное backend-разрешение частичной выборкиevent_allow_partial_coverage=false, в UI не предлагается. В Money новая политика отклоняется. Добавлены EN/RU пояснения параметров; остальные разрешения и session-arm не ослаблены.
 
 ## Проверено в этой среде
-- cargo test -p aegis-core:165unit+6integration+3integration=174успешно.
+- cargo test -p aegis-core:166unit+6integration+3integration=175успешно.
 - npm test:28успешно; Python unittest:75успешно.
 - coreClippyall-targets-Dwarnings, cargo fmt и diffcheck проходят.
 - Offline replay использует production HTTP transports на loopback fixtures: score9→облачныйответ→SimState Paperвход→закрытие→сохранение→restart→недельный файл. Score8и незавершённый ответ не допускаются. Это не реальные модели/MT5/nativeGUI в данном этапе.
 - Новый источник MT5 не подключался; переданные секреты не использованы/не выведены. Полный workspace/Tauri compile проверяется отдельным GitHubCI.
 
 ## Осталось — не считать полностью автономной системой
-1. Permanent finalized-event archive/full-ledger weekly statistics ещё не реализованы: bounded telemetry может вытеснить finalized events, weekly явно сообщает retained-only/incomplete. source-tape hardcap8MiB без безопасной rotation/archive: при заполнении новые события блокируются; требуется обслуживание.
+1. Permanent finalized-event archive/full-ledger weekly statistics ещё не реализованы: bounded telemetry может вытеснить finalized events, weekly явно сообщает retained-only/incomplete. source-tape hardcap128MiB, отдельный raw snapshot не более256KiB без безопасной rotation/archive: при заполнении новые события блокируются; требуется обслуживание.
 2. Итоговый P/L по сделке с несколькими partial reductions не агрегирован полностью; последнее закрытие не является всей суммой. До реализации агрегации такие итоги не следует использовать для подбора стратегии.
 3. Недельные рекомендации — базовые policy flags, а не обученная оценка/проверенные версии параметров. Auto-tuning и автоприменение не включены.
 4. Срез для score состоит из агрегированной sampled price/DOM availability истории; raw ticks хранятся отдельно. Полная историческая tick microstructure и динамический доступ модели к фрагментам ещё не реализованы.

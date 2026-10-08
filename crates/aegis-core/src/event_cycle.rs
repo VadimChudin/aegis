@@ -37,7 +37,12 @@ impl EventCycle {
             let path = self.root.join("source-tape.jsonl");
             let mut record = serde_json::to_vec(sample).map_err(|e| e.to_string())?;
             record.push(b'\n');
-            if std::fs::metadata(&path).map_or(0, |m| m.len()) + record.len() as u64 > 8 * 1024 * 1024 {
+            if record.len() > 256 * 1024 {
+                return Err("Source sample exceeds 256 KiB; entries blocked without truncating evidence".into());
+            }
+            // 8 MiB can fill before a ten-hour window with real tick payloads.
+            // Keep a hard bound, but permit the configured sampled windows.
+            if std::fs::metadata(&path).map_or(0, |m| m.len()) + record.len() as u64 > 128 * 1024 * 1024 {
                 return Err("Source tape quota exhausted; pending data preserved, entries blocked".into());
             }
             let mut file = std::fs::OpenOptions::new()
@@ -439,6 +444,24 @@ mod tests {
         assert!(cycle.candidate(&config, "density_bounce", 8, stamp, stamp).is_err());
         std::fs::remove_dir_all(path).unwrap();
     }
+    #[test]
+    fn source_tape_quota_preserves_existing_file_and_blocks_admission() {
+        let stamp = now() + 777;
+        let (path, mut cycle, config) = setup(stamp);
+        let tape = path.join("source-tape.jsonl");
+        let file = std::fs::File::create(&tape).unwrap();
+        file.set_len(128 * 1024 * 1024).unwrap();
+        let (mut snapshot, _) = crate::audit_http_fixture::snapshot();
+        snapshot.market.quote.time_ms = stamp + 31_000;
+        snapshot.market.observed_at_ms = stamp + 31_000;
+        assert!(cycle.source_sample(&snapshot.market).unwrap_err().contains("quota"));
+        assert_eq!(std::fs::metadata(&tape).unwrap().len(), 128 * 1024 * 1024);
+        assert!(cycle
+            .candidate(&config, "density_bounce", 123, stamp + 31_000, stamp + 31_000)
+            .is_err());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn paper_opt_in_coverage_warmup_and_budget_fail_closed() {
         let mut config = ObserverConfig::default();
