@@ -143,3 +143,30 @@ test("active observer Money mode requires explicit consent before saving or armi
   f.api.updateStatus(f.root, f.state);
   assert.equal(f.node('[data-action="run"]').disabled, true);
 });
+
+for (const [language, expected] of Object.entries({
+  en: ["Enable AI strategy analysis", "Trade execution mode", "Paper — simulation", "Real money", "not real-money trading", "selecting the mode alone does not authorize it", "not permission to execute trades"],
+  ru: ["Включить AI-анализ стратегий", "Режим исполнения сделок", "Paper — симуляция", "Реальные деньги", "а не торговля реальными деньгами", "выбор режима сам по себе не даёт разрешения", "не разрешение на исполнение сделок"],
+  kk: ["AI стратегия талдауын қосу", "Мәмілені орындау режимі", "Paper — симуляция", "Нақты ақша", "нақты ақшамен саудаға рұқсат бермейді", "режимді таңдау өздігінен рұқсат бермейді", "мәмілені орындауға рұқсат емес"],
+})) {
+  test(`settings distinguish analysis, execution, session authorization and strictness in ${language}`, () => {
+    const window = { I18N: { lang: language, t: value => value }, AEGIS: {} };
+    const source = fs.readFileSync(path.join(__dirname, "../ui/observer.js"), "utf8").replace(
+      "window.AEGIS.observer = { render, renderSettings,",
+      "window.AEGIS.observer = { configMarkup, cfgFrom, render, renderSettings,"
+    );
+    vm.runInNewContext(source, { window, document: { querySelector: () => null }, console });
+    const api = window.AEGIS.observer;
+    for (const mode of ["paper", "money"]) {
+      const markup = api.configMarkup(api.cfgFrom({ mode, ai_enabled: true }));
+      for (const label of expected) assert.ok(markup.includes(label), label);
+      assert.ok(markup.includes("money_armed"));
+      assert.match(markup, /data-config="ai_enabled" checked/);
+      assert.match(markup, new RegExp(`value="${mode}" selected`));
+      assert.match(markup, /data-money-confirm/);
+      assert.match(markup, /data-config="strictness"/);
+      assert.doesNotMatch(markup, /value="(?:observation|observe)"/);
+      assert.doesNotMatch(markup, /staged.score/i);
+    }
+  });
+}
