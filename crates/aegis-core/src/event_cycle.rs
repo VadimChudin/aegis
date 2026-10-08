@@ -320,23 +320,26 @@ impl EventCycle {
     }
     pub fn weekly_catchup(&self, now_utc: i64) -> Result<(), String> {
         let current = telemetry::utc_week_start(now_utc);
-        let first = self
-            .store
-            .events()
-            .iter()
-            .map(|e| telemetry::utc_week_start(e.started_utc))
-            .min()
-            .unwrap_or(current);
+        let first = self.store.first_archived_week()?.unwrap_or(current);
         for week in (first.max(current - 52 * 604800)..current).step_by(604800) {
             let path = self.root.join(format!("week-{week}.json"));
-            if path.exists() {
+            let report = json!({"summary":self.store.try_weekly_summary(week)?,"recommendations_only":true,"automatic_risk_changes":false,"scope":"permanent finalized archive; prior missing history explicitly flagged","paper_pnl":"already net of simulator costs; no double counting"});
+            let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
+            if std::fs::read(&path).is_ok_and(|old| old == bytes) {
                 continue;
             }
-            let report = json!({"summary":self.store.try_weekly_summary(week)?,"recommendations_only":true,"automatic_risk_changes":false,"scope":"permanent finalized archive; prior missing history explicitly flagged","paper_pnl":"already net of simulator costs; no double counting"});
             let tmp = path.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?)
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+            file.write_all(&bytes)
+                .and_then(|_| file.sync_all())
                 .map_err(|e| e.to_string())?;
+            drop(file);
             std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            std::fs::File::open(&self.root)
+                .and_then(|file| file.sync_all())
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -555,6 +558,11 @@ mod tests {
         let summary = cycle.store.try_weekly_summary((stamp / 1000) as i64).unwrap();
         assert_eq!(summary.groups[0].closed_trades, 1);
         assert!((summary.groups[0].net_pnl - 2.5).abs() < 1e-9);
+        let report_path = path.join(format!("week-{}.json", summary.start_utc));
+        std::fs::write(&report_path, b"old retained-cache report").unwrap();
+        cycle.weekly_catchup((stamp / 1000) as i64 + 604800).unwrap();
+        let report: Value = serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+        assert!((report["summary"]["groups"][0]["net_pnl"].as_f64().unwrap() - 2.5).abs() < 1e-9);
         std::fs::remove_dir_all(path).unwrap();
     }
 

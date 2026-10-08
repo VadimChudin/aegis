@@ -722,6 +722,19 @@ impl TelemetryStore {
             recommendations: vec![format!("ARCHIVE UNAVAILABLE: {error}")],
         })
     }
+    pub fn first_archived_week(&self) -> std::result::Result<Option<i64>, String> {
+        let mut first = None;
+        self.archive.visit::<serde_json::Value>(|record| {
+            if record["kind"] == "event" {
+                if let Some(at) = record["event"]["finalized"]["at_utc"].as_i64() {
+                    let week = utc_week_start(at);
+                    first = Some(first.map_or(week, |old: i64| old.min(week)));
+                }
+            }
+            Ok(())
+        })?;
+        Ok(first)
+    }
     pub fn try_weekly_summary(&self, any_utc: i64) -> std::result::Result<WeeklySummary, String> {
         let start = utc_week_start(any_utc);
         let end = start.saturating_add(WEEK);
