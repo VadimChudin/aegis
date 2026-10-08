@@ -8,6 +8,7 @@ pub mod bounce;
 pub mod broker;
 pub mod checks;
 pub mod density;
+pub mod event_archive;
 pub mod event_cycle;
 pub mod event_scoring;
 pub mod event_telemetry;

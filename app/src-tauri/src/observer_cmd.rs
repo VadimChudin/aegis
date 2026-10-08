@@ -835,7 +835,14 @@ async fn execute_money(
 fn journal(inner: &mut Inner, value: Value) -> Result<(), String> {
     inner.journal.as_mut().ok_or("Journal is unavailable")?.append(&value)?;
     if let Some(events) = inner.events.as_mut() {
-        events.reconcile(&value)?;
+        if let Err(error) = events.reconcile(&value) {
+            // Simulator closure and journal are already durable. Archive failure blocks new
+            // admissions, but must not turn a successful emergency close into a retry.
+            let message =
+                format!("Paper event archive unavailable; new entries blocked, closure remains available: {error}");
+            inner.recovery_error = Some(message.clone());
+            inner.status.error = Some(message);
+        }
     }
     Ok(())
 }
@@ -1098,6 +1105,7 @@ async fn decision_loop(app: AppHandle) {
                                     });
                                     let mut inner = state.inner.lock().await;
                                     let events = inner.events.as_mut().ok_or("Event history unavailable")?;
+                                    events.store.annotate_audit(&context.event_id,"local_score_attempt",json!({"result":scored,"cloud_allowed":allowed,"telemetry":telemetry})).map_err(|e|e.to_string())?;
                                     if !allowed {
                                         events.reject(
                                             &context.event_id,

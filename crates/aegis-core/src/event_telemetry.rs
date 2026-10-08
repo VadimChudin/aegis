@@ -159,6 +159,12 @@ pub struct Event {
     /// Owned evidence is implicitly pinned while finalized is None.
     pub evidence: Vec<Sample>,
     pub finalized: Option<Finalized>,
+    #[serde(default)]
+    pub journal_outcomes: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub audit_context: serde_json::Value,
+    #[serde(default)]
+    pub historical_outcomes_unavailable: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct State {
@@ -203,6 +209,8 @@ pub type Result<T> = std::result::Result<T, TelemetryError>;
 pub struct TelemetryStore {
     path: PathBuf,
     state: State,
+    archive: crate::event_archive::Archive,
+    history_missing: u64,
 }
 impl TelemetryStore {
     /// Reopens only exact source/budget matches. Corrupt/oversize files fail closed.
@@ -217,7 +225,7 @@ impl TelemetryStore {
         {
             return Err(TelemetryError::Invalid("source or budgets"));
         }
-        let state = match File::open(&path) {
+        let mut state = match File::open(&path) {
             Ok(file) => {
                 if file.metadata()?.len() > budgets.max_bytes as u64 {
                     return Err(TelemetryError::Invalid("oversize snapshot"));
@@ -248,8 +256,66 @@ impl TelemetryStore {
             },
             Err(e) => return Err(e.into()),
         };
-        let store = Self { path, state };
+        let archive_root = path.with_extension("archive");
+        let archive = crate::event_archive::Archive::open(&archive_root)
+            .map_err(|_| TelemetryError::Invalid("corrupt or unavailable permanent archive"))?;
+        let mut existing_migration = None;
+        archive
+            .visit::<serde_json::Value>(|value| {
+                if value["kind"] == "migration" {
+                    existing_migration = value["known_evicted_finalized"].as_u64();
+                }
+                Ok(())
+            })
+            .map_err(|_| TelemetryError::Invalid("archive migration metadata"))?;
+        if existing_migration.is_none() && path.exists() {
+            for event in &mut state.events {
+                event.historical_outcomes_unavailable = event.trade_id.is_some() && event.journal_outcomes.is_empty();
+            }
+        }
+        let history_missing = if existing_migration.is_some() {
+            let mut missing = 0;
+            archive
+                .visit::<serde_json::Value>(|value| {
+                    if value["kind"] == "migration" {
+                        missing = value["known_evicted_finalized"].as_u64().unwrap_or(0);
+                    }
+                    Ok(())
+                })
+                .map_err(|_| TelemetryError::Invalid("archive migration metadata"))?;
+            missing
+        } else {
+            state.evicted_finalized_events
+        };
+        archive.append("__migration__", &serde_json::json!({"kind":"migration","known_evicted_finalized":history_missing,"prior_partial_outcomes":"unavailable unless replay recovered","schema":1}))
+            .map_err(|_|TelemetryError::Invalid("archive migration write"))?;
+        // Recover migration flags even if death occurred after archive publication but
+        // before the bounded cache snapshot was replaced.
+        archive
+            .visit::<serde_json::Value>(|record| {
+                if record["kind"] == "event" && record["event"]["historical_outcomes_unavailable"] == true {
+                    if let Some(event) = state.events.iter_mut().find(|e| record["event"]["id"] == e.id) {
+                        event.historical_outcomes_unavailable = true;
+                    }
+                }
+                Ok(())
+            })
+            .map_err(|_| TelemetryError::Invalid("migration recovery"))?;
+        let mut store = Self {
+            path,
+            state,
+            archive,
+            history_missing,
+        };
         store.validate(&store.state)?;
+        for event in &store.state.events {
+            if event.finalized.is_some() {
+                store.archive_event(event)?;
+            }
+        }
+        if existing_migration.is_none() {
+            store.commit(store.state.clone())?;
+        }
         Ok(store)
     }
     pub fn events(&self) -> &[Event] {
@@ -277,7 +343,14 @@ impl TelemetryStore {
         evidence: Vec<Sample>,
     ) -> Result<()> {
         self.text(&id)?;
-        if id.is_empty() || started_utc < 0 || self.state.events.iter().any(|e| e.id == id) {
+        if self
+            .archive
+            .contains(&id)
+            .map_err(|_| TelemetryError::Invalid("archive identity lookup"))?
+            || id.is_empty()
+            || started_utc < 0
+            || self.state.events.iter().any(|e| e.id == id)
+        {
             return Err(TelemetryError::Invalid("event identity or time"));
         }
         self.check_conditions(&conditions)?;
@@ -292,6 +365,9 @@ impl TelemetryStore {
             trade_id: None,
             evidence,
             finalized: None,
+            journal_outcomes: Vec::new(),
+            audit_context: serde_json::Value::Null,
+            historical_outcomes_unavailable: false,
         });
         self.commit(next)
     }
@@ -340,9 +416,90 @@ impl TelemetryStore {
         if event.finalized.is_some() {
             return Err(TelemetryError::AlreadyFinalized);
         }
+        if event.historical_outcomes_unavailable && matches!(outcome, Outcome::TradeClosed { .. }) {
+            return Err(TelemetryError::UnknownOutcome);
+        }
         self.check_outcome(event, at_utc, &outcome)?;
         event.finalized = Some(Finalized { at_utc, outcome });
+        self.archive_event(event)?;
         self.commit(next)
+    }
+    fn archive_event(&self, event: &Event) -> Result<()> {
+        self.archive
+            .append(
+                &event.id,
+                &serde_json::json!({"kind":"event","source":self.state.source,"event":event,"schema":1,
+            "historical_context_unavailable":event.audit_context.is_null(),
+            "prior_partial_outcomes_unavailable":event.historical_outcomes_unavailable}),
+            )
+            .map_err(|_| TelemetryError::Invalid("immutable archive persistence failed"))
+    }
+    pub fn annotate_audit(&mut self, id: &str, key: &str, value: serde_json::Value) -> Result<()> {
+        let mut context = self
+            .state
+            .events
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or(TelemetryError::NotFound)?
+            .audit_context
+            .clone();
+        if context.is_null() {
+            context = serde_json::json!({});
+        }
+        context
+            .as_object_mut()
+            .ok_or(TelemetryError::Invalid("audit context object"))?
+            .insert(key.into(), value);
+        self.set_audit_context(id, context)
+    }
+    pub fn set_audit_context(&mut self, id: &str, context: serde_json::Value) -> Result<()> {
+        let mut next = self.state.clone();
+        let event = next
+            .events
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or(TelemetryError::NotFound)?;
+        if event.finalized.is_some() {
+            return Err(TelemetryError::AlreadyFinalized);
+        }
+        event.audit_context = context;
+        self.commit(next)
+    }
+    /// Canonical whole-journal hash distinguishes equal timestamps with different quantities.
+    /// Existing hashes are no-ops after restart. Each simulator pnl is already NET.
+    pub fn record_paper_outcome(
+        &mut self,
+        id: &str,
+        record: &serde_json::Value,
+        outcome: &crate::observer::ClosedOutcome,
+    ) -> Result<f64> {
+        use sha2::{Digest, Sha256};
+        let key = format!("{:x}", Sha256::digest(serde_json::to_vec(record)?));
+        let mut next = self.state.clone();
+        let event = next
+            .events
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or(TelemetryError::NotFound)?;
+        if !event.journal_outcomes.iter().any(|x| x["journal_sha256"] == key) {
+            if event.finalized.is_some() {
+                return Err(TelemetryError::AlreadyFinalized);
+            }
+            event
+                .journal_outcomes
+                .push(serde_json::json!({"journal_sha256":key,"outcome":outcome}));
+        }
+        let total = event.journal_outcomes.iter().try_fold(0.0, |sum, value| {
+            let pnl = value["outcome"]["pnl"].as_f64().ok_or(TelemetryError::UnknownOutcome)?;
+            let total = sum + pnl;
+            if total.is_finite() {
+                Ok(total)
+            } else {
+                Err(TelemetryError::UnknownOutcome)
+            }
+        })?;
+        self.commit(next)?;
+        Ok(total)
     }
     fn text(&self, text: &str) -> Result<()> {
         if text.len() > self.state.budgets.max_text_bytes {
@@ -484,6 +641,7 @@ impl TelemetryStore {
                 .filter(|(_, e)| e.finalized.is_some())
                 .min_by_key(|(_, e)| e.finalized.as_ref().unwrap().at_utc)
             {
+                self.archive_event(&next.events[index])?;
                 let removed = next.events.remove(index);
                 next.evicted_samples = next.evicted_samples.saturating_add(removed.evidence.len() as u64);
                 next.evicted_finalized_events = next.evicted_finalized_events.saturating_add(1);
@@ -551,21 +709,40 @@ impl TelemetryStore {
 
     /// Monday 00:00 UTC half-open week, grouped by persisted config AND currency.
     /// Counts rejected/expired signals but never assigns them imaginary trade P/L.
-    /// Retention loss is explicit; these are retained-event summaries, not a ledger.
+    /// Finalized events stream from the permanent archive; prior migration gaps remain explicit.
     pub fn weekly_summary(&self, any_utc: i64) -> WeeklySummary {
+        self.try_weekly_summary(any_utc).unwrap_or_else(|error| WeeklySummary {
+            source: self.state.source.clone(),
+            start_utc: utc_week_start(any_utc),
+            end_utc: utc_week_start(any_utc).saturating_add(WEEK),
+            groups: Vec::new(),
+            excluded_unresolved: 0,
+            evicted_finalized_events_total: self.state.evicted_finalized_events,
+            complete_history: false,
+            recommendations: vec![format!("ARCHIVE UNAVAILABLE: {error}")],
+        })
+    }
+    pub fn try_weekly_summary(&self, any_utc: i64) -> std::result::Result<WeeklySummary, String> {
         let start = utc_week_start(any_utc);
         let end = start.saturating_add(WEEK);
         let mut groups: Vec<WeeklyGroup> = Vec::new();
         let mut excluded_unresolved = 0;
-        for event in &self.state.events {
+        self.archive.visit::<serde_json::Value>(|record| {
+            if record["kind"] != "event" {
+                return Ok(());
+            }
+            let event: Event = serde_json::from_value(record["event"].clone()).map_err(|e| e.to_string())?;
             let Some(f) = &event.finalized else {
                 if event.started_utc >= start && event.started_utc < end {
                     excluded_unresolved += 1;
                 }
-                continue;
+                return Ok(());
             };
             if f.at_utc < start || f.at_utc >= end {
-                continue;
+                return Ok(());
+            }
+            if groups.len() >= 1024 {
+                return Err("Weekly config/currency group limit exceeded".into());
             }
             let index = groups
                 .iter()
@@ -578,6 +755,7 @@ impl TelemetryStore {
                         config_version: event.conditions.config_version.clone(),
                         currency: event.conditions.account_currency.clone(),
                         closed_trades: 0,
+                        unavailable_pnl_trades: 0,
                         rejected: 0,
                         expired: 0,
                         wins: 0,
@@ -596,6 +774,10 @@ impl TelemetryStore {
                     ..
                 } => {
                     group.closed_trades += 1;
+                    if event.historical_outcomes_unavailable {
+                        group.unavailable_pnl_trades += 1;
+                        return Ok(());
+                    }
                     group.gross_pnl += pnl.gross;
                     group.net_pnl += pnl.net();
                     group.costs += pnl.gross - pnl.net();
@@ -610,13 +792,21 @@ impl TelemetryStore {
                 Outcome::Expired { .. } => group.expired += 1,
                 _ => {} // Defensive: validation never allows unknown/unconfirmed finalized outcomes.
             }
-        }
-        WeeklySummary { source: self.state.source.clone(), start_utc: start, end_utc: end,
+            Ok(())
+        })?;
+        excluded_unresolved += self
+            .state
+            .events
+            .iter()
+            .filter(|e| e.finalized.is_none() && e.started_utc >= start && e.started_utc < end)
+            .count();
+        let complete_history = self.history_missing == 0 && groups.iter().all(|g| g.unavailable_pnl_trades == 0);
+        Ok(WeeklySummary { source: self.state.source.clone(), start_utc: start, end_utc: end,
             groups, excluded_unresolved, evicted_finalized_events_total: self.state.evicted_finalized_events,
-            complete_history: false, recommendations: vec![
-                "Review missing DOM and retention coverage before drawing conclusions.".into(),
+            complete_history, recommendations: vec![
+                format!("Known finalized records lost before migration: {}; old cached records explicitly mark unavailable prior partial outcomes/context.",self.history_missing),
                 "Review net costs and rejected/expired signals by config version; manual approval required for any risk change.".into(),
-            ] }
+            ] })
     }
 }
 /// Unix epoch was Thursday; Monday anchor is 1970-01-05 (345600 seconds).
@@ -648,6 +838,7 @@ pub struct WeeklyGroup {
     pub config_version: String,
     pub currency: String,
     pub closed_trades: usize,
+    pub unavailable_pnl_trades: usize,
     pub rejected: usize,
     pub expired: usize,
     pub wins: usize,
@@ -728,6 +919,79 @@ mod tests {
                 other_cost: 0.5,
             },
         }
+    }
+    #[test]
+    fn permanent_archive_cumulative_net_restart_duplicate_and_eviction() {
+        let temp = Temp::new();
+        let budgets = Budgets {
+            max_events: 1,
+            ..Budgets::default()
+        };
+        let mut store = TelemetryStore::open(temp.path(), source(), budgets.clone()).unwrap();
+        store
+            .begin_event("trade".into(), 345600, conditions(), vec![sample(345600)])
+            .unwrap();
+        store.bind_trade("trade", "42".into()).unwrap();
+        for (index, pnl) in [4.4, 12.6].iter().enumerate() {
+            let outcome = crate::observer::ClosedOutcome {
+                position_id: 42,
+                strategy_id: "density_bounce".into(),
+                closed_at_ms: 345601000,
+                exit: 103.,
+                pnl: *pnl,
+                net_r: 0.1,
+                reason: "partial_reduce".into(),
+            };
+            let record = serde_json::json!({"kind":"decision","outcome":outcome,"quantity":index});
+            store.record_paper_outcome("trade", &record, &outcome).unwrap();
+            store.record_paper_outcome("trade", &record, &outcome).unwrap();
+        }
+        drop(store);
+        let mut store = TelemetryStore::open(temp.path(), source(), budgets.clone()).unwrap();
+        assert!(store.events()[0].finalized.is_none());
+        let outcome = crate::observer::ClosedOutcome {
+            position_id: 42,
+            strategy_id: "density_bounce".into(),
+            closed_at_ms: 345602000,
+            exit: 106.,
+            pnl: 15.6,
+            net_r: 0.1,
+            reason: "close".into(),
+        };
+        let record = serde_json::json!({"kind":"outcome","outcome":outcome});
+        let total = store.record_paper_outcome("trade", &record, &outcome).unwrap();
+        assert!((total - 32.6).abs() < 1e-9);
+        store
+            .finalize(
+                "trade",
+                345602,
+                Outcome::TradeClosed {
+                    trade_id: "42".into(),
+                    confirmed_closed: true,
+                    pnl: RealizedPnl {
+                        gross: total,
+                        commission: 0.,
+                        fees: 0.,
+                        swap_cost: 0.,
+                        other_cost: 0.,
+                    },
+                },
+            )
+            .unwrap();
+        store
+            .begin_event("reject".into(), 345603, conditions(), vec![sample(345603)])
+            .unwrap();
+        store
+            .finalize("reject", 345604, Outcome::Rejected { reason: "gate".into() })
+            .unwrap();
+        drop(store);
+        let store = TelemetryStore::open(temp.path(), source(), budgets).unwrap();
+        let report = store.try_weekly_summary(345605).unwrap();
+        assert_eq!(report.groups[0].closed_trades, 1);
+        assert_eq!(report.groups[0].rejected, 1);
+        assert!((report.groups[0].net_pnl - 32.6).abs() < 1e-9);
+        assert!(store.events().iter().all(|e| e.id != "trade"));
+        assert!(report.complete_history);
     }
     #[test]
     fn append_is_durable_and_restart_keeps_pin_despite_interrupted_temp() {

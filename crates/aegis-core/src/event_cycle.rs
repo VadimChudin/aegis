@@ -11,6 +11,7 @@ pub struct EventCycle {
     pub store: telemetry::TelemetryStore,
     root: PathBuf,
     healthy: bool,
+    source_tape: crate::event_archive::Archive,
 }
 impl EventCycle {
     pub fn open(root: &Path, source: telemetry::SourceIdentity) -> Result<Self, String> {
@@ -20,6 +21,7 @@ impl EventCycle {
                 .map_err(|e| e.to_string())?,
             root: root.into(),
             healthy: true,
+            source_tape: crate::event_archive::Archive::open(root.join("source-tape.archive"))?,
         })
     }
     pub fn verify_source(&self, account: &str, server: &str) -> Result<(), String> {
@@ -40,25 +42,13 @@ impl EventCycle {
             return Ok(());
         }
         let result = (|| {
-            use std::io::Write;
-            let path = self.root.join("source-tape.jsonl");
             let mut record = serde_json::to_vec(sample).map_err(|e| e.to_string())?;
             record.push(b'\n');
             if record.len() > 256 * 1024 {
                 return Err("Source sample exceeds 256 KiB; entries blocked without truncating evidence".into());
             }
-            // 8 MiB can fill before a ten-hour window with real tick payloads.
-            // Keep a hard bound, but permit the configured sampled windows.
-            if std::fs::metadata(&path).map_or(0, |m| m.len()) + record.len() as u64 > 128 * 1024 * 1024 {
-                return Err("Source tape quota exhausted; pending data preserved, entries blocked".into());
-            }
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|e| e.to_string())?;
-            file.write_all(&record).map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
+            let key = format!("{:x}", Sha256::digest(&record));
+            self.source_tape.append(&key, sample)?;
             let dom = sample
                 .book
                 .as_ref()
@@ -93,7 +83,7 @@ impl EventCycle {
                 dom,
             })
         })();
-        self.healthy = result.is_ok();
+        self.healthy &= result.is_ok();
         result
     }
     pub fn sample(&mut self, sample: telemetry::Sample) -> Result<(), String> {
@@ -171,7 +161,7 @@ impl EventCycle {
         let data = json!({"strategy_id":strategy,"window_hours":hours,"coverage_policy":"sampled_30s_max_gap_45s","sampled_coverage_ready":coverage,"explicit_partial_permission":config.event_allow_partial_coverage,"full_tick_history":false,"historical_dom_invented":false,"slices":slices});
         self.store
             .begin_event(
-                id,
+                id.clone(),
                 now,
                 telemetry::OutcomeConditions {
                     config_version: format!(
@@ -183,6 +173,12 @@ impl EventCycle {
                     account_currency: "simulation equity units".into(),
                 },
                 evidence,
+            )
+            .map_err(|e| e.to_string())?;
+        self.store
+            .set_audit_context(
+                &id,
+                json!({"initial_config":config,"policy":data,"version":env!("CARGO_PKG_VERSION")}),
             )
             .map_err(|e| e.to_string())?;
         Ok((context, data))
@@ -233,10 +229,32 @@ impl EventCycle {
     }
     /// Idempotent journal reconciliation also repairs a crash between journal and telemetry writes.
     pub fn reconcile(&mut self, record: &Value) -> Result<(), String> {
+        let result = self.reconcile_inner(record);
+        if result.is_err() {
+            self.healthy = false;
+        }
+        result
+    }
+    fn reconcile_inner(&mut self, record: &Value) -> Result<(), String> {
+        if record["source"] == "money" {
+            return Ok(());
+        }
+        if record["kind"] == "event_score" {
+            if let Some(id) = record["event_review"]["event_id"].as_str() {
+                if self.store.events().iter().any(|e| e.id == id && e.finalized.is_none()) {
+                    self.store
+                        .annotate_audit(id, "event_review", record["event_review"].clone())
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
         if record["kind"] == "decision" && record["source"] == "paper" {
             if let (Some(strategy), Some(snapshot)) = (record["strategy_id"].as_str(), record["snapshot_id"].as_u64()) {
                 let id = format!("{strategy}:{snapshot}");
                 if self.store.events().iter().any(|e| e.id == id && e.finalized.is_none()) {
+                    self.store
+                        .annotate_audit(&id, "cloud_decision_and_policy", record.clone())
+                        .map_err(|e| e.to_string())?;
                     if record["accepted"] == true
                         && matches!(record["decision"]["action"].as_str(), Some("long" | "short"))
                     {
@@ -262,10 +280,8 @@ impl EventCycle {
         };
         if !value.is_null() {
             let outcome: ClosedOutcome = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-            // A reduction is realized P/L but not terminal closure; never unpin its evidence.
-            if record["sim_state"]["position"]["id"].as_u64() == Some(outcome.position_id) {
-                return Ok(());
-            }
+            let remaining = record["sim_state"]["position"]["id"].as_u64() == Some(outcome.position_id)
+                || (outcome.reason == "partial_reduce" && !record["sim_state"].is_object());
             let ids: Vec<_> = self
                 .store
                 .events()
@@ -274,6 +290,13 @@ impl EventCycle {
                 .map(|e| e.id.clone())
                 .collect();
             for id in ids {
+                let total_net = self
+                    .store
+                    .record_paper_outcome(&id, record, &outcome)
+                    .map_err(|e| e.to_string())?;
+                if remaining {
+                    continue;
+                }
                 self.store
                     .finalize(
                         &id,
@@ -282,7 +305,7 @@ impl EventCycle {
                             trade_id: outcome.position_id.to_string(),
                             confirmed_closed: true,
                             pnl: telemetry::RealizedPnl {
-                                gross: outcome.pnl,
+                                gross: total_net,
                                 commission: 0.,
                                 fees: 0.,
                                 swap_cost: 0.,
@@ -309,7 +332,7 @@ impl EventCycle {
             if path.exists() {
                 continue;
             }
-            let report = json!({"summary":self.store.weekly_summary(week),"recommendations_only":true,"automatic_risk_changes":false,"scope":"retained events, not full ledger","paper_pnl":"already net of simulator costs; no double counting"});
+            let report = json!({"summary":self.store.try_weekly_summary(week)?,"recommendations_only":true,"automatic_risk_changes":false,"scope":"permanent finalized archive; prior missing history explicitly flagged","paper_pnl":"already net of simulator costs; no double counting"});
             let tmp = path.with_extension("tmp");
             std::fs::write(&tmp, serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
@@ -452,7 +475,34 @@ mod tests {
         std::fs::remove_dir_all(path).unwrap();
     }
     #[test]
-    fn source_tape_quota_preserves_existing_file_and_blocks_admission() {
+    fn split_journal_partial_replay_is_exactly_once_and_terminal_sums() {
+        let stamp = now() + 987;
+        let (path, mut cycle, config) = setup(stamp);
+        let (context, _) = cycle.candidate(&config, "density_bounce", 123, stamp, stamp).unwrap();
+        cycle.store.bind_trade(&context.event_id, "42".into()).unwrap();
+        let make = |pnl, reason, quantity| json!({"kind":"outcome","outcome":{"position_id":42,"strategy_id":"density_bounce","closed_at_ms":stamp,"exit":106.,"pnl":pnl,"net_r":0.1,"reason":reason},"quantity":quantity});
+        let partial1 = make(4.4, "partial_reduce", 2);
+        let partial2 = make(12.6, "partial_reduce", 3);
+        cycle.reconcile(&partial1).unwrap();
+        cycle.reconcile(&partial1).unwrap();
+        assert!(cycle.store.events()[0].finalized.is_none());
+        let source = cycle.store.source().clone();
+        drop(cycle);
+        let mut cycle = EventCycle::open(&path, source).unwrap();
+        cycle.reconcile(&partial1).unwrap();
+        cycle.reconcile(&partial2).unwrap();
+        cycle.reconcile(&partial2).unwrap();
+        assert!(cycle.store.events()[0].finalized.is_none());
+        let terminal = make(15.6, "close", 3);
+        cycle.reconcile(&terminal).unwrap();
+        cycle.reconcile(&terminal).unwrap();
+        assert_eq!(cycle.store.events()[0].journal_outcomes.len(), 3);
+        let summary = cycle.store.try_weekly_summary((stamp / 1000) as i64).unwrap();
+        assert!((summary.groups[0].net_pnl - 32.6).abs() < 1e-9);
+        assert_eq!(summary.groups[0].closed_trades, 1);
+    }
+    #[test]
+    fn source_tape_legacy_quota_does_not_block_permanent_archive() {
         let stamp = now() + 777;
         let (path, mut cycle, config) = setup(stamp);
         assert!(cycle.verify_source("fixture-account", "fixture").is_ok());
@@ -464,11 +514,47 @@ mod tests {
         let (mut snapshot, _) = crate::audit_http_fixture::snapshot();
         snapshot.market.quote.time_ms = stamp + 31_000;
         snapshot.market.observed_at_ms = stamp + 31_000;
-        assert!(cycle.source_sample(&snapshot.market).unwrap_err().contains("quota"));
+        cycle.source_sample(&snapshot.market).unwrap();
+        let mut actual = 0;
+        cycle
+            .source_tape
+            .visit::<serde_json::Value>(|_| {
+                actual += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(actual, 1);
         assert_eq!(std::fs::metadata(&tape).unwrap().len(), 128 * 1024 * 1024);
         assert!(cycle
             .candidate(&config, "density_bounce", 123, stamp + 31_000, stamp + 31_000)
-            .is_err());
+            .is_ok());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn full_reduction_with_explicit_empty_position_is_terminal() {
+        let stamp = now() + 515;
+        let (path, mut cycle, config) = setup(stamp);
+        let (context, _) = cycle.candidate(&config, "density_bounce", 77, stamp, stamp).unwrap();
+        cycle.store.bind_trade(&context.event_id, "42".into()).unwrap();
+        let outcome = ClosedOutcome {
+            position_id: 42,
+            strategy_id: "density_bounce".into(),
+            closed_at_ms: stamp + 1000,
+            exit: 101.,
+            pnl: 2.5,
+            net_r: 0.1,
+            reason: "partial_reduce".into(),
+        };
+        let record =
+            json!({"kind":"decision", "source":"paper", "paper_outcome":outcome, "sim_state":{"position":null}});
+        cycle.reconcile(&record).unwrap();
+        cycle.reconcile(&record).unwrap();
+        let event = cycle.store.events().iter().find(|e| e.id == context.event_id).unwrap();
+        assert!(event.finalized.is_some());
+        let summary = cycle.store.try_weekly_summary((stamp / 1000) as i64).unwrap();
+        assert_eq!(summary.groups[0].closed_trades, 1);
+        assert!((summary.groups[0].net_pnl - 2.5).abs() < 1e-9);
         std::fs::remove_dir_all(path).unwrap();
     }
 
