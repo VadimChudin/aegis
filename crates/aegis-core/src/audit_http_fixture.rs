@@ -52,10 +52,13 @@ pub(crate) fn agreement(local: &ModelDecision, cloud: &ModelDecision) -> Result<
 
 #[test]
 fn audit_agreement_harness_is_exact_app_source() {
-    let source = include_str!("../../../app/src-tauri/src/observer_cmd.rs");
+    let source = include_str!("../../../app/src-tauri/src/observer_cmd.rs").replace("\r\n", "\n");
     let start = source.find("fn agree(").unwrap();
     let end = start + source[start..].find("\n}\n").unwrap() + 2;
-    assert_eq!(&source[start..end], include_str!("audit_app_agree.rs").trim_end());
+    assert_eq!(
+        &source[start..end],
+        include_str!("audit_app_agree.rs").replace("\r\n", "\n").trim_end()
+    );
     assert!(source.contains("agree(&local_decision, &confirmed)?;"));
     assert!(source.contains("None => Err(\"OpenRouter key unavailable; no new entries\".into())"));
 }
