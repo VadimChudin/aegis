@@ -10,6 +10,7 @@
   const FRAMES = [["1m", "M1"], ["5m", "M5"], ["15m", "M15"], ["1h", "H1"], ["4h", "H4"], ["1d", "D1"]];
   const DEFAULTS = {
     strictness: 100,
+    event_paper_enabled: false, event_window_hours: 2, event_cloud_calls_per_hour: 5, event_cooldown_seconds: 300,
     strategies: STRATEGIES.map((s) => ({ id: s.id, enabled: true, prompt: JSON.stringify({ objective: s.prompt, entry_rules: ["Use only closed-candle confirmation."], exit_rules: ["Exit when the setup is invalidated."], timeframes: ["1m", "5m", "15m", "1h", "4h", "1d"] }, null, 2), timeframes: FRAMES.map(([id]) => id), risk_pct: 0.5, max_positions: 1 })),
     risk_pct: 0.5,
     initial_equity: 10000,
@@ -106,7 +107,7 @@
       return { id: def.id, enabled: item.enabled == null ? true : !!item.enabled, prompt: typeof item.prompt === "string" ? item.prompt : defaults.prompt, timeframes: FRAMES.map(([id]) => id).filter(id => (Array.isArray(item.timeframes) ? item.timeframes : defaults.timeframes).includes(id)), risk_pct: Number.isFinite(Number(item.risk_pct)) ? Number(item.risk_pct) : defaults.risk_pct, max_positions: Number.isFinite(Number(item.max_positions)) ? Number(item.max_positions) : defaults.max_positions, max_daily_loss_pct: Number.isFinite(Number(item.max_daily_loss_pct)) ? Number(item.max_daily_loss_pct) : 3 };
     });
     const number = (key) => Number.isFinite(Number(input[key])) ? Number(input[key]) : DEFAULTS[key];
-    return { ...input, strictness: Math.min(100, Math.max(0, Math.round(number("strictness")))), strategies, risk_pct: number("risk_pct"), initial_equity: number("initial_equity"), max_spread: number("max_spread"), commission_per_oz: number("commission_per_oz"), slippage: number("slippage"), ai_enabled: !!input.ai_enabled, mode: input.mode === "money" ? "money" : "paper", broker: "roboforex" };
+    return { ...input, event_paper_enabled: input.event_paper_enabled === true, event_window_hours: number("event_window_hours"), event_cloud_calls_per_hour: number("event_cloud_calls_per_hour"), event_cooldown_seconds: number("event_cooldown_seconds"), strictness: Math.min(100, Math.max(0, Math.round(number("strictness")))), strategies, risk_pct: number("risk_pct"), initial_equity: number("initial_equity"), max_spread: number("max_spread"), commission_per_oz: number("commission_per_oz"), slippage: number("slippage"), ai_enabled: !!input.ai_enabled, mode: input.mode === "money" ? "money" : "paper", broker: "roboforex" };
   }
   function configMarkup(config) {
     const lock = STATES.get(document.querySelector(".obs-root"));
@@ -120,6 +121,14 @@
         <p class="obs-help">${esc(text("authorization_help"))}</p>
         <label class="obs-toggle obs-money-confirm"><input type="checkbox" data-money-confirm><span>${esc(text("I understand real-money trading can lose money and is not guaranteed."))}</span></label>
         <p class="obs-safety">${esc(text("Money mode warning. Live execution requires an explicit confirmation for this session. Verify the Windows demo first."))}</p>
+      </section>
+      <section class="obs-card" data-event-settings><h3>${esc(lang() === "ru" ? "Событийный цикл · только Paper" : "Event cycle · Paper only")}</h3>
+        <label class="obs-toggle"><input type="checkbox" data-config="event_paper_enabled" ${config.event_paper_enabled ? "checked" : ""} ${disabled}><span>${esc(lang() === "ru" ? "Локальный score → облако только при > 8" : "Local score → cloud only above 8")}</span></label>
+        <p class="obs-help">${esc(lang() === "ru" ? "По умолчанию выключено. Только Paper, без права реальных ордеров. До входа требуется накопленный срез. Score не является вероятностью прибыли. Защита позиции и аварийное закрытие не зависят от порога score." : "Off by default. Paper only; no real order permission. Evidence must accumulate before entry. Score is not profit probability. Protection and emergency close bypass the score gate.")}</p>
+        <div class="obs-numbers"><label class="obs-label">${esc(lang() === "ru" ? "Срез истории, часы" : "History window, hours")}<select data-config="event_window_hours" ${disabled}>${[2,3,10].map(h => `<option value="${h}" ${config.event_window_hours === h ? "selected" : ""}>${h}</option>`).join("")}</select></label>
+        <label class="obs-label">${esc(lang() === "ru" ? "Максимум новых облачных запросов/час" : "Maximum new cloud requests/hour")}<input type="number" data-config="event_cloud_calls_per_hour" min="1" max="60" step="1" value="${esc(config.event_cloud_calls_per_hour)}" ${disabled}></label>
+        <label class="obs-label">${esc(lang() === "ru" ? "Пауза между сигналами стратегии, секунды" : "Strategy cooldown, seconds")}<input type="number" data-config="event_cooldown_seconds" min="30" max="86400" step="1" value="${esc(config.event_cooldown_seconds)}" ${disabled}></label></div>
+        <p class="obs-help">${esc(lang() === "ru" ? "Лимит запросов не является денежным бюджетом. Недельный отчёт — рекомендации, без автоматического повышения риска. История собирается, пока работает приложение; полный исторический поток тиков не восстанавливается." : "Request cap is not a monetary budget. Weekly reports are advisory, without automatic risk increases. History accumulates while the app runs; complete historical ticks are not reconstructed.")}</p>
       </section>
       <section class="obs-card"><h3>${esc(text("strategies"))}</h3><div class="obs-strategy-list">${config.strategies.map((strategy) => {
         const def = STRATEGIES.find(s => s.id === strategy.id);
@@ -344,6 +353,7 @@
         if (item) item[key] = node.type === "checkbox" ? node.checked : Number(node.value);
       } else if (key === "strictness") config.strictness = Number(node.value);
       else if (key === "ai_enabled") config.ai_enabled = node.checked;
+      else if (key === "event_paper_enabled") config.event_paper_enabled = node.checked;
       else if (key === "mode") config.mode = node.value;
       else if (node.value !== "") config[key] = Number(node.value);
     });
@@ -371,6 +381,7 @@
     if (notice) notice.textContent = !jsonEqual(state.config, state.saved) ? text("dirty") : "";
   }
   function validateConfig(config) {
+    if ((config.event_paper_enabled && config.mode !== "paper") || ![2,3,10].includes(config.event_window_hours) || !Number.isInteger(config.event_cloud_calls_per_hour) || config.event_cloud_calls_per_hour < 1 || config.event_cloud_calls_per_hour > 60 || !Number.isInteger(config.event_cooldown_seconds) || config.event_cooldown_seconds < 30 || config.event_cooldown_seconds > 86400) return lang() === "ru" ? "Событийный цикл: только Paper; окно 2/3/10 часов, 1–60 запросов/час, пауза 30–86400 секунд." : "Event cycle requires Paper, 2/3/10 hours, 1–60 calls/hour and 30–86400 seconds cooldown.";
     if (config.ai_enabled && !config.strategies.some(strategy => strategy.enabled)) return text("need_strategy");
     for (const strategy of config.strategies) {
       if (!strategy.prompt.trim() || strategy.prompt.length > 10000) return text("prompt_invalid");

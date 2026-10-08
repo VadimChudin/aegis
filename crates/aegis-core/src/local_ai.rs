@@ -264,6 +264,15 @@ fn extract(archive: &Path, name: &str, dest: &Path) -> Result<(), String> {
 }
 
 impl Runtime {
+    #[cfg(test)]
+    pub(crate) fn fixture(endpoint: String) -> Self {
+        Self {
+            root: PathBuf::new(),
+            endpoint,
+            child: Arc::new(Mutex::new(None)),
+        }
+    }
+
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -566,6 +575,59 @@ impl Runtime {
             16,
         )
         .await
+    }
+
+    pub async fn score(
+        &self,
+        context: &crate::event_scoring::ScoringContext,
+        telemetry: &Value,
+    ) -> Result<crate::event_scoring::LocalScoreResponse, String> {
+        let prompt = crate::event_scoring::build_local_prompt(
+            context,
+            &telemetry.to_string(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let mut response = http(Duration::from_secs(28))?
+            .post(format!("{}/api/chat", self.endpoint))
+            .json(&json!({"model":MODEL,"stream":false,"think":false,"keep_alive":"10m",
+                "format":crate::event_scoring::local_response_schema(),
+                "messages":[{"role":"system","content":prompt.system},{"role":"user","content":prompt.user}],
+                "options":{"num_ctx":8192,"num_predict":512,"temperature":0}}))
+            .send()
+            .await
+            .map_err(|e| format!("Event scoring deadline or transport: {e}"))?;
+        if !response.status().is_success() {
+            return Err("Event scoring HTTP failure".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            if bytes.len() + chunk.len() > 32768 {
+                return Err("Event transport response exceeds bound".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if value["done"] != true
+            || value["done_reason"] != "stop"
+            || value["error"].is_string()
+            || value["prompt_eval_count"].as_u64().unwrap_or(8192) > 7600
+        {
+            return Err("Event score did not complete with strict stop/context bounds".into());
+        }
+        let content = value["message"]["content"].as_str().ok_or("Missing event score")?;
+        crate::event_scoring::parse_local_response(
+            content,
+            context,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        )
+        .map_err(|e| format!("{e:?}"))
     }
 
     pub async fn observe(&self, prompt: &str, system: &str) -> Result<Answer, String> {

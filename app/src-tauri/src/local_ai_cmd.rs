@@ -63,6 +63,15 @@ impl LocalAiState {
         }
     }
 
+    pub async fn score(
+        &self,
+        context: &aegis_core::event_scoring::ScoringContext,
+        telemetry: &serde_json::Value,
+    ) -> Result<aegis_core::event_scoring::LocalScoreResponse, String> {
+        let _operation = self.begin("Scoring Paper event")?;
+        self.runtime.lock().await.score(context, telemetry).await
+    }
+
     pub async fn shutdown(&self) {
         let child = self.process.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(child) = child {

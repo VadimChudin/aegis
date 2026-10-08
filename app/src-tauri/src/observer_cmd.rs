@@ -78,6 +78,7 @@ pub struct Diagnostic {
 
 struct Inner {
     config: ObserverConfig,
+    events: Option<aegis_core::event_cycle::EventCycle>,
     sim: SimState,
     journal: Option<Journal>,
     status: ObserverStatus,
@@ -231,6 +232,7 @@ impl ObserverState {
         let (changed, _) = watch::channel(0);
         Self {
             inner: Mutex::new(Inner {
+                events: None,
                 config,
                 sim,
                 journal,
@@ -831,7 +833,11 @@ async fn execute_money(
 }
 
 fn journal(inner: &mut Inner, value: Value) -> Result<(), String> {
-    inner.journal.as_mut().ok_or("Journal is unavailable")?.append(&value)
+    inner.journal.as_mut().ok_or("Journal is unavailable")?.append(&value)?;
+    if let Some(events) = inner.events.as_mut() {
+        events.reconcile(&value)?;
+    }
+    Ok(())
 }
 
 async fn sample_loop(app: AppHandle) {
@@ -870,6 +876,23 @@ async fn sample_loop(app: AppHandle) {
             }
             inner.status.position = inner.sim.position.clone();
             inner.status.equity = inner.sim.equity;
+            // Stop/target protection above is independent of event telemetry health.
+            let event_result=(|| -> Result<(),String> {
+            if config.event_paper_enabled && config.mode == "paper" {
+                if inner.events.is_none() {
+                    let (account,server)=inner.account_identity.clone().ok_or("Event source account not yet verified")?;
+                    let source=aegis_core::event_telemetry::SourceIdentity::mt5_xauusd(server,account.to_string(),"observer-live".into());
+                    let mut events=aegis_core::event_cycle::EventCycle::open(&state.root.join("events"),source)?;
+                    for record in inner.journal.as_ref().ok_or("Journal unavailable")?.replay()? { events.reconcile(&record)?; }
+                    inner.events=Some(events);
+                }
+                let events=inner.events.as_mut().expect("opened event store");
+                events.source_sample(&sample)?;
+                events.weekly_catchup((now_ms()/1000) as i64)?;
+            }
+                Ok(())
+            })();
+            if let Err(error)=event_result { inner.status.error=Some(error); }
             inner.status.sample = Some(sample);
             if state.running() && !inner.status.frames.is_empty() {
                 let sample = inner.status.sample.as_ref().expect("sample was assigned");
@@ -1042,45 +1065,112 @@ async fn decision_loop(app: AppHandle) {
                 let local_decision = observer::parse_decision(&answer.response);
                 match local_decision {
                     Ok(local_decision) => {
-                        let key = app.state::<AppState>().settings.lock().await.ai_key();
-                        match key {
-                            Some(key) => {
-                                let cloud_payload = json!({"market":input,"local_proposal":local_decision,
-                                    "instruction":"Independently check the SPA and supplied market. Return the same decision schema with the actual snapshot_id. Disagreement means wait."}).to_string();
-                                let cloud = tokio::select! {
-                                    value = aegis_core::ai_provider::consult(&key,&cloud_payload,&system,25) => value,
-                                    _ = async {
-                                        loop {
-                                            if !state.running() || epoch!=state.epoch.load(Ordering::SeqCst) { break; }
-                                            if cancel.changed().await.is_err() { break; }
+                        let entry = matches!(local_decision.action.as_str(), "long" | "short");
+                        if config.event_paper_enabled && !entry {
+                            Ok(answer)
+                        } else {
+                            let event_gate = if config.event_paper_enabled {
+                                async {
+                                    let (context, telemetry) = {
+                                        let mut inner = state.inner.lock().await;
+                                        let quote_ms = inner
+                                            .status
+                                            .sample
+                                            .as_ref()
+                                            .ok_or("Event current quote unavailable")?
+                                            .quote
+                                            .time_ms;
+                                        inner.events.as_mut().ok_or("Event history unavailable")?.candidate(
+                                            &config,
+                                            &strategy.id,
+                                            snapshot.id,
+                                            quote_ms,
+                                            now_ms(),
+                                        )?
+                                    };
+                                    let scored = local.score(&context, &telemetry).await;
+                                    let allowed = scored.as_ref().is_ok_and(|s| {
+                                        aegis_core::event_scoring::cloud_eligible(s, &context, now_ms())
+                                    });
+                                    let mut inner = state.inner.lock().await;
+                                    let events = inner.events.as_mut().ok_or("Event history unavailable")?;
+                                    if !allowed {
+                                        events.reject(
+                                            &context.event_id,
+                                            now_ms(),
+                                            "Local score invalid, stale, or not strictly >8",
+                                        )?;
+                                        return Err("Local event gate rejected; no cloud request".into());
+                                    }
+                                    if !state.running() || epoch != state.epoch.load(Ordering::SeqCst) {
+                                        return Err("Event analysis cancelled; no cloud dispatch".into());
+                                    }
+                                    let review = json!({"event_id":context.event_id,"local_score":scored.as_ref().map_err(Clone::clone)?,"telemetry":telemetry});
+                                    journal(&mut inner, json!({"schema_version":1,"kind":"event_score","at_ms":now_ms(),"event_review":review}))?;
+                                    inner.events.as_mut().ok_or("Event history unavailable")?.admit_cloud(&config, &context.event_id, now_ms())?;
+                                    Ok::<Option<Value>, String>(Some(review))
+                                }
+                                .await
+                            } else {
+                                Ok(None)
+                            };
+                            if let Err(error) = &event_gate {
+                                Err(error.clone())
+                            } else {
+                                let event_review = event_gate.ok().flatten();
+                                let key = app.state::<AppState>().settings.lock().await.ai_key();
+                                match key {
+                                    Some(key) => {
+                                        if !state.running() || epoch != state.epoch.load(Ordering::SeqCst) {
+                                            continue;
                                         }
-                                    } => {continue;}
-                                };
-                                cloud.and_then(|cloud| {
-                                    let confirmed = observer::parse_decision(&cloud.response)?;
-                                    agree(&local_decision, &confirmed)?;
-                                    let fresh = state
-                                        .inner
-                                        .try_lock()
-                                        .ok()
-                                        .and_then(|inner| inner.status.sample.clone())
-                                        .ok_or("Latest broker quote unavailable")?;
-                                    observer::validate_decision(
-                                        &snapshot,
-                                        &config,
-                                        &strategy,
-                                        &confirmed,
-                                        &fresh,
-                                        now_ms(),
-                                    )?;
-                                    Ok(aegis_core::local_ai::Answer {
-                                        response: answer.response,
-                                        elapsed_ms: answer.elapsed_ms + cloud.latency_ms,
-                                        memories_used: 0,
-                                    })
-                                })
+                                        let mut cloud_input = input.clone();
+                                        if let Some(review) = event_review {
+                                            cloud_input["event_review"] = review;
+                                        }
+                                        if config.event_paper_enabled {
+                                            if let Some(object) = cloud_input.as_object_mut() {
+                                                object.remove("account");
+                                            }
+                                        }
+                                        let cloud_payload = json!({"market":cloud_input,"local_proposal":local_decision,
+                                    "instruction":"Independently check the SPA and supplied market. Return the same decision schema with the actual snapshot_id. Disagreement means wait."}).to_string();
+                                        let cloud = tokio::select! {
+                                            value = aegis_core::ai_provider::consult(&key,&cloud_payload,&system,25) => value,
+                                            _ = async {
+                                                loop {
+                                                    if !state.running() || epoch!=state.epoch.load(Ordering::SeqCst) { break; }
+                                                    if cancel.changed().await.is_err() { break; }
+                                                }
+                                            } => {continue;}
+                                        };
+                                        cloud.and_then(|cloud| {
+                                            let confirmed = observer::parse_decision(&cloud.response)?;
+                                            agree(&local_decision, &confirmed)?;
+                                            let fresh = state
+                                                .inner
+                                                .try_lock()
+                                                .ok()
+                                                .and_then(|inner| inner.status.sample.clone())
+                                                .ok_or("Latest broker quote unavailable")?;
+                                            observer::validate_decision(
+                                                &snapshot,
+                                                &config,
+                                                &strategy,
+                                                &confirmed,
+                                                &fresh,
+                                                now_ms(),
+                                            )?;
+                                            Ok(aegis_core::local_ai::Answer {
+                                                response: answer.response,
+                                                elapsed_ms: answer.elapsed_ms + cloud.latency_ms,
+                                                memories_used: 0,
+                                            })
+                                        })
+                                    }
+                                    None => Err("OpenRouter key unavailable; no new entries".into()),
+                                }
                             }
-                            None => Err("OpenRouter key unavailable; no new entries".into()),
                         }
                     }
                     Err(error) => Err(error),
@@ -1261,6 +1351,9 @@ async fn decision_loop(app: AppHandle) {
                 }
             }
             Err(error) => {
+                if let Some(events) = inner.events.as_mut() {
+                    let _ = events.reject(&format!("{}:{}", strategy.id, snapshot.id), now_ms(), &error);
+                }
                 inner.status.error = Some(error.clone());
                 inner.status.phase = "Inference failed; no new simulation entry".into();
                 let event = json!({"schema_version":1,"kind":"inference_error","at_ms":now_ms(),"snapshot_id":snapshot.id,"strategy_id":strategy.id,"error":error});
