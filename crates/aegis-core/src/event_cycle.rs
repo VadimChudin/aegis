@@ -5,7 +5,10 @@ use crate::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 pub struct EventCycle {
     pub store: telemetry::TelemetryStore,
@@ -23,6 +26,60 @@ impl EventCycle {
             healthy: true,
             source_tape: crate::event_archive::Archive::open(root.join("source-tape.archive"))?,
         })
+    }
+    /// Dispatch only event/source-bound requests against this source-owned archive.
+    pub async fn tool_results(
+        &self,
+        context: &scoring::ScoringContext,
+        requests: &[crate::event_tools::ToolRequest],
+        connector: &crate::broker::Connector,
+    ) -> Result<Vec<Value>, String> {
+        if requests.len() > crate::event_tools::MAX_CALLS
+            || connector.symbol() != context.source.instrument
+            || connector.id() != crate::broker::BrokerId::Roboforex
+        {
+            return Err("Tool plan connector or call budget mismatch".into());
+        }
+        // A context from another source store must never open this archive.
+        let current = self.source_context_id();
+        if context.source.source_id != current {
+            return Err("Tool source store mismatch".into());
+        }
+        let mut dispatcher = crate::event_tools::Dispatcher::new(context);
+        let mut results = Vec::new();
+        for request in requests {
+            crate::event_tools::require_fresh(context, crate::sign::now_ms().max(0) as u64)?;
+            dispatcher.admit(request, crate::sign::now_ms().max(0) as u64)?;
+            let result = if matches!(request.tool, crate::event_tools::ToolName::QueryTickSlice) {
+                match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    connector.history_ticks(request.start_ms, request.end_ms, crate::event_tools::MAX_ROWS),
+                )
+                .await
+                {
+                    Ok(Ok(Some(history))) => dispatcher.historical(request, &history)?,
+                    other => {
+                        let mut fallback = dispatcher.observed(&self.source_tape, request)?;
+                        fallback["history_unavailable"] = json!(match other {
+                            Ok(Err(e)) => e.to_string(),
+                            Ok(Ok(None)) => "connector history unsupported".into(),
+                            Err(_) => "history deadline exceeded".into(),
+                            _ => "history unavailable".into(),
+                        });
+                        fallback
+                    }
+                }
+            } else {
+                dispatcher.observed(&self.source_tape, request)?
+            };
+            results.push(result);
+        }
+        Ok(results)
+    }
+    fn source_context_id(&self) -> String {
+        let source = self.store.source();
+        let identity = format!("{}:{}:{}:{}", source.venue, source.server, source.account, source.feed);
+        format!("{:x}", Sha256::digest(identity.as_bytes()))
     }
     pub fn verify_source(&self, account: &str, server: &str) -> Result<(), String> {
         let source = self.store.source();

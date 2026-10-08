@@ -63,6 +63,18 @@ impl LocalAiState {
         }
     }
 
+    pub async fn select_event_tools(
+        &self,
+        context: &aegis_core::event_scoring::ScoringContext,
+        pattern_hint: &serde_json::Value,
+    ) -> Result<Vec<aegis_core::event_tools::ToolRequest>, String> {
+        let _operation = self.begin("Selecting event telemetry slices")?;
+        self.runtime
+            .lock()
+            .await
+            .select_event_tools(context, pattern_hint)
+            .await
+    }
     pub async fn score(
         &self,
         context: &aegis_core::event_scoring::ScoringContext,

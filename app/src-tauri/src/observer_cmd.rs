@@ -1099,7 +1099,30 @@ async fn decision_loop(app: AppHandle) {
                                             now_ms(),
                                         )?
                                     };
+                                    // Model chooses at most two bounded subwindows once. Invalid or
+                                    // timed-out plans fall back to the deterministic host plan.
+                                    let hint = json!({"strategy_id":strategy.id,"action":local_decision.action,"reason":local_decision.reason.chars().take(512).collect::<String>(),"snapshot_id":snapshot.id});
+                                    let selection = tokio::time::timeout(std::time::Duration::from_secs(4), local.select_event_tools(&context, &hint)).await;
+                                    let (requests, selection_note) = match selection {
+                                        Ok(Ok(requests)) if !requests.is_empty() => (requests, "model_selected"),
+                                        _ => (aegis_core::event_tools::Dispatcher::new(&context).plan().to_vec(), "deterministic_fallback"),
+                                    };
+                                    if !state.running() || epoch != state.epoch.load(Ordering::SeqCst) { return Err("Observer epoch changed during tool selection".into()); }
+                                    let conn = connector(&appstate).await?;
+                                    let results = {
+                                        let inner = state.inner.lock().await;
+                                        let (account, server) = inner.account_identity.clone().ok_or("Event source account unavailable")?;
+                                        let events = inner.events.as_ref().ok_or("Event history unavailable")?;
+                                        events.verify_source(&account.to_string(), &server)?;
+                                        events.tool_results(&context,&requests,&conn).await?
+                                    };
+                                    if !state.running() || epoch != state.epoch.load(Ordering::SeqCst) { return Err("Observer epoch changed during tool dispatch".into()); }
+                                    aegis_core::event_tools::require_fresh(&context,now_ms())?;
+                                    let mut telemetry = telemetry;
+                                    aegis_core::event_tools::attach_results(&mut telemetry, results)?;
+                                    telemetry["tool_selection"] = json!(selection_note);
                                     let scored = local.score(&context, &telemetry).await;
+                                    if !state.running() || epoch != state.epoch.load(Ordering::SeqCst) { return Err("Observer epoch changed during score".into()); }
                                     let allowed = scored.as_ref().is_ok_and(|s| {
                                         aegis_core::event_scoring::cloud_eligible(s, &context, now_ms())
                                     });

@@ -12,6 +12,7 @@ pub mod event_archive;
 pub mod event_cycle;
 pub mod event_scoring;
 pub mod event_telemetry;
+pub mod event_tools;
 pub mod live_market;
 pub mod local_ai;
 pub mod market;

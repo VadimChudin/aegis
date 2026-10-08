@@ -216,6 +216,80 @@ class Bridge:
         finally:
             mt5.market_book_release(self.symbol)
 
+    def history_ticks(self, req):
+        """Bounded UTC slice, never a claim of complete exchange tape."""
+        if not self.symbol:
+            raise BridgeError("not connected")
+        start = req.get("start_ms")
+        end = req.get("end_ms")
+        limit = req.get("max_ticks", 512)
+        if any(isinstance(x, bool) or not isinstance(x, int) for x in (start, end, limit)):
+            raise BridgeError("history bounds and max_ticks must be integers")
+        now_ms = time.time_ns() // 1_000_000
+        if start <= 0 or end <= start or end - start > 10 * 3600 * 1000 or end > now_ms + 2000:
+            raise BridgeError("history slice requires positive UTC bounds, at most 10 hours, not future data")
+        if not 1 <= limit <= 2000:
+            raise BridgeError("max_ticks must be 1..2000")
+        if req.get("symbol", self.symbol) != self.symbol:
+            raise BridgeError("history source symbol mismatch")
+        mt5 = self.mt5()
+        def verify_account():
+            account = mt5.account_info()
+            if account is None or self._account_identity is None or (int(account.login), str(account.server)) != self._account_identity:
+                raise BridgeError("MT5 account changed; reconnect before requesting history")
+        verify_account()
+        terminal = mt5.terminal_info()
+        if terminal is None or not terminal.connected:
+            raise BridgeError("MT5 terminal is disconnected")
+        copy_ticks = getattr(mt5, "copy_ticks_from", None)
+        if copy_ticks is None:
+            raise BridgeError("MT5 tick history API unavailable")
+        since = datetime.fromtimestamp(start / 1000, timezone.utc)
+        try:
+            history = copy_ticks(self.symbol, since, limit + 1, mt5.COPY_TICKS_ALL)
+        except Exception as exc:
+            raise BridgeError("MT5 tick history request failed") from exc
+        verify_account()
+        if history is None:
+            raise BridgeError("MT5 tick history unavailable")
+        ticks = []
+        invalid = 0
+        outside = 0
+        inspected = 0
+        previous = None
+        for row in history:
+            inspected += 1
+            if inspected > limit + 1:
+                break
+            try:
+                data = row if isinstance(row, dict) else dict(zip(row.dtype.names, row))
+                stamp = data.get("time_msc") or int(data.get("time", 0)) * 1000
+                stamp = int(stamp)
+                bid, ask = float(data["bid"]), float(data["ask"])
+                last = float(data.get("last", 0)) or None
+                volume = float(data.get("volume_real", data.get("volume", 0)))
+                if stamp < start or stamp > end:
+                    outside += 1
+                    continue
+                if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask < bid or (last is not None and (not math.isfinite(last) or last <= 0)) or not math.isfinite(volume) or volume < 0:
+                    invalid += 1
+                    continue
+                if previous is not None and stamp < previous:
+                    invalid += 1
+                    continue
+                previous = stamp
+                ticks.append({"time_ms":stamp,"bid":bid,"ask":ask,"last":last,"volume":volume})
+            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+                invalid += 1
+        truncated = len(ticks) > limit or inspected > limit
+        result = {"symbol":self.symbol,"start_ms":start,"end_ms":end,"observed_at_ms":time.time_ns() // 1_000_000,
+                  "ticks":ticks[:limit],"truncated":truncated,"complete_history":False,
+                  "volume_kind":"mt5_ticks_not_exchange_tape",
+                  "coverage_note":f"Bounded first ticks from requested UTC slice; full history not established; invalid_rows={invalid}; outside_rows={outside}"}
+        if len(json.dumps(result).encode("utf-8")) > 384 * 1024:
+            raise BridgeError("MT5 historical tick response exceeds byte budget")
+        return result
+
     def market_snapshot(self, _req):
         if not self.symbol:
             raise BridgeError("not connected")
@@ -1020,6 +1094,7 @@ def serve(bridge, stdin, stdout):
         "candles": bridge.candles,
         "order_book": bridge.order_book,
         "market_snapshot": bridge.market_snapshot,
+        "history_ticks": bridge.history_ticks,
         "trading_state": bridge.trading_state,
         "place_order": bridge.place_order,
         "close_position": bridge.close_position,

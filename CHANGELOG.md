@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0-beta.5 — Audit and Paper telemetry prerelease
+
+- Audited local AI startup/recovery and bounded decision reliability fixes.
+- Opt-in Paper event telemetry score gate and outcomes, bounded raw samples and practical
+  hour windows; telemetry invalidated after MT5 source changes.
+- Permanent Paper archive, cumulative partial-exit PnL and refreshed weekly reports.
+- Consistent workspace/core/app package versions; Rust, Python and Node release tests on
+  all three platforms before publication. Windows NSIS, Linux DEB and universal macOS DMG.
+- Experimental prerelease only: Paper default, Money default off. Fixtures and CPU Qwen
+  deadline checks do not establish broker/demo or real-money acceptance. See
+  `docs/release-beta5.md` for verification limits and the all-platform draft publication gate.
+- Point 6: event-bound read-only tick/book tools, finite local-model slice selection with bounded fallback, authorized MT5 historical ticks, observed-archive book slices and evidence passed to local score/cloud review. Missing/truncated history stays explicit; no arbitrary URLs or reconstructed DOM.
+
 ## 0.7.0-beta.4 — Technical reliability fixes
 
 - Stop occupies a measured header slot instead of overlapping Brokers, including at minimum

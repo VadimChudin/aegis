@@ -1,13 +1,108 @@
 name: release
 
-on:
+"on":
   push:
+    branches:
+      - release/0.7.0-beta.5
     tags:
       - "v*"
   workflow_dispatch:
 
+# The branch-created tag uses GITHUB_TOKEN and normally does not retrigger push.
+# Serialize matching branch/tag/manual runs and reject already-published releases.
+concurrency:
+  group: release-${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Reject published release or mismatched existing tag
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/release/0.7.0-beta.5'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || github.ref_name }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              if (!release.draft) throw new Error(`Release ${tag} is already published; refusing asset re-upload`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            try {
+              const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: `tags/${tag}` });
+              if (commit.sha !== context.sha) throw new Error(`Existing ${tag} does not point to this checkout; refusing release`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+  verify:
+    needs: preflight
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check package versions and release branch
+        shell: python
+        run: |
+          import json, os, pathlib, tomllib
+          root = pathlib.Path('.')
+          version = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['version']
+          assert json.loads((root / 'app/package.json').read_text())['version'] == version
+          lock = json.loads((root / 'app/package-lock.json').read_text())
+          assert lock['version'] == lock['packages']['']['version'] == version
+          assert json.loads((root / 'app/src-tauri/tauri.conf.json').read_text())['version'] == version
+          packages = tomllib.loads((root / 'Cargo.lock').read_text())['package']
+          local = [p for p in packages if p['name'] in ('aegis-core', 'aegis-app') and 'source' not in p]
+          assert len(local) == 2 and all(p['version'] == version for p in local)
+          if os.environ['GITHUB_REF'] == 'refs/heads/release/0.7.0-beta.5':
+              assert version == '0.7.0-beta.5'
+          print('Consistent package version:', version)
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+      - name: Rust core lint
+        run: cargo clippy -p aegis-core --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Python bridge tests (optional research extras may skip)
+        run: python -m unittest discover -s tests -v
+        working-directory: python
+      - run: npm ci
+        working-directory: app
+      - name: JavaScript syntax check
+        shell: python
+        run: |
+          import pathlib, subprocess
+          for source in sorted(pathlib.Path('app/ui').glob('*.js')):
+              subprocess.run(['node', '--check', str(source)], check=True)
+      - run: npm test
+        working-directory: app
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -38,20 +133,70 @@ jobs:
         with:
           targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - name: Python bridge tests
-        if: runner.os == 'Linux'
-        run: python3 -m unittest discover -s tests -v
+      - run: cargo test --workspace --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python bridge tests (optional research extras may skip)
+        run: python -m unittest discover -s tests -v
         working-directory: python
       - run: npm ci
         working-directory: app
+      - run: npm test
+        working-directory: app
+      - name: Load beta release notes
+        id: notes
+        if: github.ref == 'refs/heads/release/0.7.0-beta.5' || github.ref == 'refs/tags/v0.7.0-beta.5'
+        shell: python
+        run: |
+          import os, pathlib, uuid
+          body = pathlib.Path('docs/release-beta5.md').read_text(encoding='utf-8')
+          delimiter = 'NOTES_' + uuid.uuid4().hex
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('body<<' + delimiter + '\n' + body + '\n' + delimiter + '\n')
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: app
           args: ${{ matrix.args }}
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: AEGIS ${{ github.ref_name }}
-          releaseDraft: false
+          tagName: ${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: AEGIS ${{ (github.ref == 'refs/heads/release/0.7.0-beta.5' || github.ref == 'refs/tags/v0.7.0-beta.5') && '0.7.0-beta.5' || github.ref_name }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseCommitish: ${{ github.sha }}
+          # Keep all uploads private until the full matrix and asset checks succeed.
+          releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/release/0.7.0-beta.5'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Verify all installers and publish release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || github.ref_name }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            if (!release.draft) throw new Error(`Release ${tag} is not a draft; refusing to republish`);
+            const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: `tags/${tag}` });
+            if (commit.sha !== context.sha) throw new Error(`Tag ${tag} does not point to the tested checkout`);
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
+            for (const extension of ['.exe', '.deb', '.dmg']) {
+              if (!assets.some(asset => asset.name.toLowerCase().endsWith(extension) && asset.size > 0 && asset.state === 'uploaded')) {
+                throw new Error(`Missing nonempty uploaded ${extension} installer; release remains draft`);
+              }
+            }
+            const prerelease = tag === 'v0.7.0-beta.5' || tag.includes('-beta') || tag.includes('-alpha');
+            const { data: published } = await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false, prerelease });
+            if (published.draft || published.prerelease !== prerelease) throw new Error('Release publication state verification failed');
+            core.summary.addHeading('Verified release installers');
+            for (const asset of assets) core.summary.addRaw(`${asset.name} (${asset.size} bytes)\n`);
+            core.summary.addLink('Published release', published.html_url);
+            await core.summary.write();
