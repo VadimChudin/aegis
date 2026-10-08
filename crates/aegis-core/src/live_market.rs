@@ -99,10 +99,22 @@ fn validate_time(name: &str, timestamp: u64, now_ms: u64, require_fresh: bool) -
         return Err(format!("{name} timestamp must be positive Unix milliseconds"));
     }
     if timestamp > now_ms.saturating_add(MAX_FUTURE_MS) {
-        return Err(format!("{name} timestamp is more than 2 seconds in the future"));
+        let ahead_ms = timestamp.saturating_sub(now_ms);
+        return Err(format!(
+            "{name} timestamp is more than 2 seconds in the future: ahead_ms={ahead_ms}, \
+             timestamp_ms={timestamp}, app_now_ms={now_ms}, allowed_future_ms={MAX_FUTURE_MS}. \
+             Synchronize the computer clock and reconnect MT5. If this persists, inspect broker timestamps; \
+             changing the display timezone does not change Unix time. Paper/Money start is blocked."
+        ));
     }
     if require_fresh && now_ms.saturating_sub(timestamp) > MAX_STALE_MS {
-        return Err(format!("{name} timestamp is more than 10 seconds stale"));
+        let age_ms = now_ms.saturating_sub(timestamp);
+        return Err(format!(
+            "{name} timestamp is more than 10 seconds stale: age_ms={age_ms}, \
+             timestamp_ms={timestamp}, app_now_ms={now_ms}, allowed_stale_ms={MAX_STALE_MS}. \
+             Check the MT5 connection and whether the symbol's market is open. \
+             Old prices are not replaced with the current time. Paper/Money start is blocked."
+        ));
     }
     Ok(())
 }
@@ -167,6 +179,30 @@ mod tests {
         let first = value.ticks[0].clone();
         value.ticks.resize(MAX_TICKS + 1, first);
         assert!(value.validate(now).unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn timestamp_diagnostics_preserve_exact_future_and_stale_boundaries() {
+        let now = 1_700_000_000_000;
+        assert!(validate_time("quote", now + MAX_FUTURE_MS, now, true).is_ok());
+        let future = validate_time("quote", now + MAX_FUTURE_MS + 1, now, true).unwrap_err();
+        assert!(future.contains("quote timestamp is more than 2 seconds in the future"));
+        assert!(future.contains("ahead_ms=2001"));
+        assert!(future.contains("timestamp_ms=1700000002001"));
+        assert!(future.contains("app_now_ms=1700000000000"));
+        assert!(future.contains("allowed_future_ms=2000"));
+        assert!(future.contains("Synchronize"));
+        assert!(validate_time("quote", now - MAX_STALE_MS, now, true).is_ok());
+        let stale = validate_time("quote", now - MAX_STALE_MS - 1, now, true).unwrap_err();
+        assert!(stale.contains("age_ms=10001"));
+        assert!(stale.contains("allowed_stale_ms=10000"));
+        assert!(stale.contains("market is open"));
+        // Historical ticks can be old, but a future tick must still be rejected.
+        assert!(validate_time("ticks[0]", now - MAX_STALE_MS - 1, now, false).is_ok());
+        assert!(validate_time("ticks[0]", now + MAX_FUTURE_MS + 1, now, false)
+            .unwrap_err()
+            .contains("ticks[0]"));
+        assert!(validate_time("observation", 0, now, true).is_err());
     }
 
     #[test]
