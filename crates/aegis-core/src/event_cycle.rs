@@ -22,6 +22,13 @@ impl EventCycle {
             healthy: true,
         })
     }
+    pub fn verify_source(&self, account: &str, server: &str) -> Result<(), String> {
+        let source = self.store.source();
+        if source.account != account || source.server != server {
+            return Err("Event source account/server changed; existing telemetry must not be reused".into());
+        }
+        Ok(())
+    }
     /// Bounded source tape: actual observed ticks/DOM only, sampled every 30 seconds.
     pub fn source_sample(&mut self, sample: &crate::live_market::MarketSample) -> Result<(), String> {
         if self
@@ -448,6 +455,9 @@ mod tests {
     fn source_tape_quota_preserves_existing_file_and_blocks_admission() {
         let stamp = now() + 777;
         let (path, mut cycle, config) = setup(stamp);
+        assert!(cycle.verify_source("fixture-account", "fixture").is_ok());
+        assert!(cycle.verify_source("another-account", "fixture").is_err());
+        assert!(cycle.verify_source("fixture-account", "another-server").is_err());
         let tape = path.join("source-tape.jsonl");
         let file = std::fs::File::create(&tape).unwrap();
         file.set_len(128 * 1024 * 1024).unwrap();

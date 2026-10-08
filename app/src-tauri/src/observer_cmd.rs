@@ -886,7 +886,9 @@ async fn sample_loop(app: AppHandle) {
                     for record in inner.journal.as_ref().ok_or("Journal unavailable")?.replay()? { events.reconcile(&record)?; }
                     inner.events=Some(events);
                 }
+                let (account,server)=inner.account_identity.clone().ok_or("Event source account unavailable")?;
                 let events=inner.events.as_mut().expect("opened event store");
+                events.verify_source(&account.to_string(), &server)?;
                 events.source_sample(&sample)?;
                 events.weekly_catchup((now_ms()/1000) as i64)?;
             }
@@ -1080,6 +1082,8 @@ async fn decision_loop(app: AppHandle) {
                                             .ok_or("Event current quote unavailable")?
                                             .quote
                                             .time_ms;
+                                        let (account, server) = inner.account_identity.clone().ok_or("Event source account unavailable")?;
+                                        inner.events.as_ref().ok_or("Event history unavailable")?.verify_source(&account.to_string(), &server)?;
                                         inner.events.as_mut().ok_or("Event history unavailable")?.candidate(
                                             &config,
                                             &strategy.id,
