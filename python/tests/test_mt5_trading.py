@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -240,6 +241,102 @@ class Mt5TradingTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeError, "stop-distance"):
             self.bridge.modify_stop({"ticket": 505, "stop": 4292.5})
         fake._state["freeze_level"] = 0
+
+    def test_open_refuses_account_switch_during_broker_checks(self):
+        original_check = fake.order_check
+        for check_number in (1, 2):
+            with self.subTest(check_number=check_number):
+                fake._state.update(account_login=1, order_checks=0, order_sends=0, positions=[])
+
+                def change_account(request):
+                    result = original_check(request)
+                    if fake._state["order_checks"] == check_number:
+                        fake._state["account_login"] = 999
+                    return result
+
+                try:
+                    with patch.object(fake, "order_check", change_account):
+                        result = self.bridge.place_order(self.request(f"account-switch-{check_number}"))
+                    self.assertEqual(result["status"], "rejected")
+                    self.assertEqual(fake._state["order_sends"], 0)
+                finally:
+                    fake._state["account_login"] = 1
+
+    def test_open_refuses_server_switch_during_final_broker_check(self):
+        original_info = fake.account_info
+
+        def current_account():
+            info = original_info()
+            if fake._state["order_checks"] >= 2:
+                info.server = "Different-Server"
+            return info
+
+        with patch.object(fake, "account_info", current_account):
+            result = self.bridge.place_order(self.request("server-switch"))
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(fake._state["order_sends"], 0)
+
+    def test_reconnect_rebinds_account_identity_and_trade_ledger(self):
+        old_ledger = self.bridge._ledger_path
+        self.bridge.connect({"login": 2, "password": "good", "server": "RoboForex-ECN"})
+        self.assertNotEqual(self.bridge._ledger_path, old_ledger)
+        result = self.bridge.place_order(self.request("reconnected-account"))
+        self.assertEqual(result["status"], "filled")
+        self.assertEqual(fake._state["order_sends"], 1)
+
+    def test_management_refuses_account_switch_after_connection(self):
+        for action, request in (
+            (self.bridge.close_position, {"ticket": 303}),
+            (self.bridge.reduce_position, {"ticket": 303, "fraction": 0.5}),
+            (self.bridge.modify_stop, {"ticket": 303, "stop": 4292.0}),
+        ):
+            with self.subTest(action=action.__name__):
+                fake._state["positions"] = [SimpleNamespace(
+                    ticket=303, symbol="XAUUSD", type=fake.POSITION_TYPE_BUY, volume=0.08,
+                    price_open=4293.0, price_current=4293.0, sl=4290.0, tp=4300.0,
+                    profit=0.0, magic=MAGIC, comment="AEGIS XAUUSD")]
+                fake._state.update(account_login=999, order_sends=0)
+                try:
+                    with self.assertRaisesRegex(BridgeError, "account identity changed"):
+                        action(request)
+                    self.assertEqual(fake._state["order_sends"], 0)
+                finally:
+                    fake._state["account_login"] = 1
+
+    def test_open_refuses_daily_loss_breach_during_broker_checks(self):
+        original_check = fake.order_check
+        for check_number in (1, 2):
+            with self.subTest(check_number=check_number):
+                fake._state.update(order_checks=0, order_sends=0, positions=[], deals=[], balance=1000.0)
+
+                def realize_loss(request):
+                    result = original_check(request)
+                    if fake._state["order_checks"] == check_number:
+                        fake._state["deals"] = [SimpleNamespace(
+                            symbol="XAUUSD", profit=-60.0, commission=0.0, swap=0.0)]
+                        fake._state["balance"] = 940.0
+                    return result
+
+                try:
+                    with patch.object(fake, "order_check", realize_loss):
+                        result = self.bridge.place_order(self.request(f"daily-loss-{check_number}"))
+                    self.assertEqual(result["status"], "rejected")
+                    self.assertEqual(fake._state["order_sends"], 0)
+                finally:
+                    fake._state.update(deals=[], balance=1000.0)
+
+    def test_open_refuses_unavailable_daily_history_after_final_check(self):
+        original_history = fake.history_deals_get
+
+        def history(start, end):
+            if fake._state["order_checks"] >= 2:
+                return None
+            return original_history(start, end)
+
+        with patch.object(fake, "history_deals_get", history):
+            result = self.bridge.place_order(self.request("history-unavailable"))
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(fake._state["order_sends"], 0)
 
 
 if __name__ == "__main__":

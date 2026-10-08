@@ -101,11 +101,14 @@ async fn status(state: &LocalAiState) -> Result<LocalStatus, String> {
     let disk = Runtime::new(state.root.clone());
     runtime.installed = disk.installed();
     runtime.model_downloaded |= disk.downloaded();
+    // Installation/inference holds runtime for a long time. Inspect the shared
+    // child directly rather than reporting a cached pre-operation ownership bit.
     runtime.owned_server = state
-        .runtime
-        .try_lock()
-        .map(|mut r| r.owned())
-        .unwrap_or_else(|_| state.owned.load(Ordering::SeqCst));
+        .process
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+        .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
     let _memory = state.memory_lock.lock().await;
     let memory_count = state.memory()?.list().len();
     Ok(LocalStatus {

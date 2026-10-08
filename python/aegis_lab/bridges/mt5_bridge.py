@@ -48,6 +48,7 @@ class Bridge:
         self.symbol = None
         self.offset = 0
         self._ledger_path = None
+        self._account_identity = None
 
     def mt5(self):
         if self._mt5 is None:
@@ -70,6 +71,7 @@ class Bridge:
         return reply
 
     def connect(self, req):
+        self._account_identity = None
         mt5 = self.mt5()
         kwargs = {
             "login": int(req["login"]),
@@ -86,6 +88,7 @@ class Bridge:
         self.symbol = self._find_symbol(mt5)
         self.offset = self._server_offset(mt5)
         info = mt5.account_info()
+        self._account_identity = (int(info.login), str(info.server)) if info else None
         identity = f"{info.login}:{info.server}" if info else str(kwargs["login"])
         root = Path(os.environ.get("AEGIS_TRADE_LEDGER_DIR", Path.home() / ".aegis" / "trade-ledger"))
         self._ledger_path = root / (hashlib.sha256(identity.encode()).hexdigest() + ".json")
@@ -544,6 +547,8 @@ class Bridge:
             raise BridgeError("MT5 terminal is disconnected")
         if account is None or not account.trade_allowed or not account.trade_expert:
             raise BridgeError("MT5 account trading is not allowed")
+        if self._account_identity is None or (int(account.login), str(account.server)) != self._account_identity:
+            raise BridgeError("MT5 account identity changed; reconnect before trading")
         if require_algo and not terminal.trade_allowed:
             raise BridgeError("MT5 automated trading is not enabled for this terminal/account")
         if self.symbol != TRADE_SYMBOL:
@@ -551,6 +556,17 @@ class Bridge:
         if require_usd and account.currency != "USD":
             raise BridgeError("automated risk sizing currently requires a USD account")
         return account
+
+    def _check_daily_loss(self, mt5, account, positions, loss_limit):
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        history = mt5.history_deals_get(today, datetime.now(timezone.utc))
+        if history is None:
+            raise BridgeError("MT5 could not confirm today's XAUUSD profit and loss")
+        daily_profit = sum(float(d.profit) + float(getattr(d, "commission", 0)) + float(getattr(d, "swap", 0))
+                           for d in history if d.symbol == self.symbol)
+        daily_profit += sum(float(p.profit) for p in positions if int(p.magic) == MAGIC)
+        if loss_limit and daily_profit <= -(float(account.balance) * loss_limit / 100):
+            raise BridgeError("daily loss limit reached")
 
     def place_order(self, req):
         mt5 = self.mt5()
@@ -615,15 +631,7 @@ class Bridge:
         exposure_room = float(account.equity) * 10 - current_notional
         if exposure_room <= 0:
             raise BridgeError("maximum aggregate XAUUSD notional exposure reached")
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        history = mt5.history_deals_get(today, datetime.now(timezone.utc))
-        if history is None:
-            raise BridgeError("MT5 could not confirm today's XAUUSD profit and loss")
-        daily_profit = sum(float(d.profit) + float(getattr(d, "commission", 0)) + float(getattr(d, "swap", 0))
-                           for d in history if d.symbol == self.symbol)
-        daily_profit += sum(float(p.profit) for p in positions if int(p.magic) == MAGIC)
-        if loss_limit and daily_profit <= -(float(account.balance) * loss_limit / 100):
-            raise BridgeError("daily loss limit reached")
+        self._check_daily_loss(mt5, account, positions, loss_limit)
         per_lot = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
                                         self.symbol, 1.0, entry, stop)
         if per_lot is None or not math.isfinite(float(per_lot)) or float(per_lot) >= 0:
@@ -750,6 +758,8 @@ class Bridge:
                 ending_notional += float(position.volume) * float(info.trade_contract_size) * float(position.price_current)
             if ending_risk > float(account_end.equity) * 0.05 or ending_notional > float(account_end.equity) * 10:
                 return self._trade_result(request_id, "rejected", -1, "aggregate exposure limits changed before send")
+            self._check_daily_loss(mt5, account_end, positions_end, loss_limit)
+            self._trading_permission(mt5)
             mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
@@ -999,6 +1009,7 @@ class Bridge:
         if self._mt5 is not None:
             self._mt5.shutdown()
         self.symbol = None
+        self._account_identity = None
         return {}
 
 

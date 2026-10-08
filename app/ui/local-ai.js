@@ -268,11 +268,12 @@
     }
 
     const busy = Boolean(state.action) || Boolean(status?.progress?.busy);
-    install.disabled = busy || !consent.checked || Boolean(status?.installed && status?.model_downloaded);
-    start.disabled = busy || !status?.installed || !status?.model_downloaded;
+    const statusUnavailable = Boolean(state.statusError);
+    install.disabled = busy || statusUnavailable || !consent.checked || Boolean(status?.installed && status?.model_downloaded);
+    start.disabled = busy || statusUnavailable || !status?.installed || !status?.model_downloaded;
     stop.disabled = busy || !status?.owned_server;
-    ping.disabled = busy || !status?.server_ready || !status?.model_downloaded;
-    ask.disabled = busy || !status?.server_ready || !status?.model_downloaded;
+    ping.disabled = busy || statusUnavailable || !status?.server_ready || !status?.model_downloaded;
+    ask.disabled = busy || statusUnavailable || !status?.server_ready || !status?.model_downloaded;
     $(container, "[data-lai-add]").disabled = busy;
     $(container, "[data-lai-note]").textContent = state.action ? `${state.action}…` : "";
   }

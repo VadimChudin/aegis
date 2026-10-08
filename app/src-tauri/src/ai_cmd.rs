@@ -103,9 +103,10 @@ struct Runtime {
     message: String,
     last_request: u64,
     setup: Value,
-    server: Option<Child>,
 }
 pub struct AiState {
+    // Serialize process transitions independently of paper/budget state.
+    server: Mutex<Option<Child>>,
     inner: Mutex<Runtime>,
     busy: AtomicBool,
     setup_busy: AtomicBool,
@@ -148,6 +149,7 @@ impl AiState {
             None => (PaperEngine::new(&settings), Costs::default(), None),
         };
         Self {
+            server: Mutex::new(None),
             inner: Mutex::new(Runtime {
                 paper,
                 costs,
@@ -160,7 +162,6 @@ impl AiState {
                 } else {
                     json!({"status":"Не настроено", "progress":0})
                 },
-                server: None,
             }),
             busy: AtomicBool::new(false),
             setup_busy: AtomicBool::new(false),
@@ -397,7 +398,9 @@ async fn step_inner(state: &AppState, broker: BrokerId, cloud_only: bool, epoch:
         r.last_request = now();
         r.paper.state()
     };
-    ensure_server(state).await?;
+    if !cloud_only {
+        ensure_server(state).await?;
+    }
     let mut answer = if cloud_only {
         Decision::Consult {
             snapshot_id: snap.id,
@@ -594,57 +597,74 @@ fn setup_script(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or("Нет ai_setup.py в установке".into())
 }
 async fn ensure_server(state: &AppState) -> Result<(), String> {
+    const ENDPOINT: &str = "http://127.0.0.1:11434";
     let root = state.ai.path.parent().ok_or("Нет каталога AI")?.join("ai-runtime");
-    let mut r = state.ai.inner.lock().await;
-    if let Some(child) = r.server.as_mut() {
-        if child.try_wait().ok().flatten().is_none() {
-            return Ok(());
+    let mut server = state.ai.server.lock().await;
+    if let Some(child) = server.as_mut() {
+        if child
+            .try_wait()
+            .map_err(|e| format!("Cannot inspect Ollama: {e}"))?
+            .is_some()
+        {
+            *server = None;
         }
-        r.server = None;
     }
-    let binary = root.join("runtime/bin/ollama");
-    if !binary.exists() {
+    // Reuse an external healthy server without trying to bind its occupied port.
+    if server.is_none() && aegis_core::local_ai::server_ready(ENDPOINT).await {
         return Ok(());
     }
-    let mut command = Command::new(binary);
-    command
-        .arg("serve")
-        .env("OLLAMA_HOST", "127.0.0.1:11434")
-        .env("OLLAMA_MODELS", root.join("models"))
-        .env("OLLAMA_NO_CLOUD", "1")
-        .env("OLLAMA_CONTEXT_LENGTH", "8192")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.as_std_mut().process_group(0);
-    }
-    let child = command.spawn().map_err(|_| "Не удалось запустить Ollama")?;
-    r.server = Some(child);
-    drop(r);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "HTTP client failed")?;
-    for _ in 0..20 {
-        if client
-            .get("http://127.0.0.1:11434/api/version")
-            .send()
-            .await
-            .is_ok_and(|r| r.status().is_success())
-        {
+    if server.is_none() {
+        let binary = root.join("runtime/bin/ollama");
+        if !binary.is_file() {
+            // The configured OpenAI-compatible local endpoint need not be Ollama.
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        let mut command = Command::new(binary);
+        command
+            .arg("serve")
+            .env("OLLAMA_HOST", "127.0.0.1:11434")
+            .env("OLLAMA_MODELS", root.join("models"))
+            .env("OLLAMA_NO_CLOUD", "1")
+            .env("OLLAMA_CONTEXT_LENGTH", "8192")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        *server = Some(
+            command
+                .spawn()
+                .map_err(|e| format!("Не удалось запустить Ollama: {e}"))?,
+        );
     }
-    Err("Локальный runtime ещё не готов; повторите проверку подключения".into())
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let child = server.as_mut().ok_or("Managed Ollama process disappeared")?;
+            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                return Err("Managed Ollama exited before becoming ready".to_string());
+            }
+            if aegis_core::local_ai::server_ready(ENDPOINT).await {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err("Локальный runtime ещё не готов; повторите проверку подключения".into()));
+    if result.is_err() {
+        if let Some(child) = server.take() {
+            aegis_core::local_ai::stop_process(child).await?;
+        }
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn ai_setup_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let root = state.ai.path.parent().ok_or("Нет каталога AI")?.join("ai-runtime");
     if state.ai.setup_busy.swap(true, Ordering::SeqCst) {
         return Err("Настройка уже выполняется".into());
     }
@@ -655,7 +675,6 @@ pub async fn ai_setup_model(app: AppHandle, state: State<'_, AppState>) -> Resul
             return Err(e);
         }
     };
-    let root = state.ai.path.parent().ok_or("Нет каталога AI")?.join("ai-runtime");
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         let result = async {
@@ -685,7 +704,9 @@ pub async fn ai_setup_model(app: AppHandle, state: State<'_, AppState>) -> Resul
         if let Err(e) = result {
             state.ai.inner.lock().await.setup = json!({"status":e,"progress":0});
         } else {
-            let _ = ensure_server(&state).await;
+            if let Err(error) = ensure_server(&state).await {
+                state.ai.inner.lock().await.setup = json!({"status":error,"progress":0});
+            }
         }
         state.ai.setup_busy.store(false, Ordering::SeqCst);
     });
@@ -733,23 +754,17 @@ pub async fn run(app: AppHandle) {
     }
 }
 pub async fn shutdown(state: &AppState) {
-    let mut r = state.ai.inner.lock().await;
-    r.running = false;
-    let _ = state.ai.save(&r);
-    if let Some(child) = r.server.as_mut() {
-        #[cfg(unix)]
-        {
-            if let Some(pid) = child.id() {
-                let _ = Command::new("kill")
-                    .args(["-TERM", "--", &format!("-{pid}")])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .await;
-                let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
-            }
+    state.ai.epoch.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut r = state.ai.inner.lock().await;
+        r.running = false;
+        let _ = state.ai.save(&r);
+    }
+    let child = state.ai.server.lock().await.take();
+    if let Some(child) = child {
+        if let Err(error) = aegis_core::local_ai::stop_process(child).await {
+            eprintln!("Managed AI runtime shutdown failed: {error}");
         }
-        let _ = child.kill().await;
     }
 }
 

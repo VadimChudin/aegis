@@ -4,7 +4,7 @@
   if (!A) return;
   const { invoke, esc, S } = A;
   const fields = [
-    { id: "local_url", label: "Адрес локальной модели", type: "url", placeholder: "http://127.0.0.1:11434" },
+    { id: "local_url", label: "Адрес локальной модели", type: "url", placeholder: "http://127.0.0.1:11434/v1/chat/completions" },
     { id: "local_model", label: "Локальная модель", placeholder: "qwen3:8b" },
     { id: "cloud_model", label: "Облачная модель", placeholder: "Название модели провайдера" },
     { id: "strategy", label: "Стратегия", placeholder: "Название стратегии" },
@@ -76,6 +76,7 @@
     return `<label class="ai-broker"><span>Источник котировок / Paper-брокер</span><select id="ai-broker" ${ids.length ? "" : "disabled"}>${ids.length ? options : `<option value="">Нет подключённых брокеров</option>`}</select></label>`;
   }
   function scaffold(root) {
+    B.loaded = false;
     root.innerHTML = `<div class="ai-panel" data-testid="ai-panel">
       <section class="ai-card ai-live-card" aria-labelledby="ai-live-title"><div class="ai-section-head"><div><span class="ai-kicker">AI · PAPER</span><h3 id="ai-live-title">Состояние и результаты</h3></div><button type="button" class="ghost sm" id="ai-refresh">Обновить</button></div>
         <div id="ai-status" class="ai-status" role="status" aria-live="polite"><p class="hint">Загрузка состояния…</p></div>
@@ -97,6 +98,7 @@
     if (root.dataset.aiBound !== "1") {
       root.dataset.aiBound = "1";
       root.addEventListener("click", (event) => handleClick(root, event));
+      root.addEventListener("change", (event) => { if (event.target.id === "ai-broker") renderStatus(root); });
       root.addEventListener("submit", (event) => { if (event.target.id === "ai-settings-form") { event.preventDefault(); saveSettings(root); } });
     }
   }
@@ -153,7 +155,7 @@
     const statusHasError = /error|ошиб|поврежд|некорректн|заблокирован/i.test(s.message || "");
     if (start) start.disabled = running || busy || !hasBroker || statusHasError || !!B.error;
     if (stop) stop.disabled = !running && !busy;
-    if (step) step.disabled = running || busy || !hasBroker;
+    if (step) step.disabled = running || busy || !hasBroker || statusHasError || !!B.error;
     const setupButton = $(root, "ai-setup");
     const setupBusy = ["checking_runtime", "downloading_runtime", "starting_runtime", "preparing_model", "downloading_model"].includes(setup.status);
     if (setupButton) setupButton.disabled = busy || setupBusy;
@@ -181,6 +183,8 @@
       renderStatus(root);
     } catch (e) {
       if (S.panel === "ai" && root.isConnected) {
+        B.error = errorText(e);
+        renderStatus(root);
         const statusEl = $(root, "ai-status");
         if (statusEl) statusEl.innerHTML = `<p class="ai-inline-error" role="alert">Не удалось получить состояние AI: ${esc(errorText(e))}</p>`;
         const settingsEl = $(root, "ai-settings");
@@ -204,8 +208,8 @@
     showResult(root, B.notice);
     renderStatus(root);
     try {
-      await invoke(command, args);
-      showResult(root, `${label}: готово.`);
+      const result = await invoke(command, args);
+      showResult(root, command === "ai_test" && result != null ? `${label}: ${stringify(result)}` : `${label}: готово.`);
       await refresh(root);
     } catch (e) {
       const message = `${label}: ${errorText(e)}`;
@@ -261,7 +265,8 @@
     if (closeButton) {
       const broker = $(root, "ai-broker")?.value;
       const positionId = Number(closeButton.dataset.positionId);
-      if (!broker || !connectedBrokers().includes(broker) || !Number.isSafeInteger(positionId) || positionId < 0) {
+      const position = B.status?.paper?.positions?.find(x => x.id === positionId);
+      if (closeButton.disabled || !position || String(position.broker || "").toLowerCase() !== String(broker || "").toLowerCase() || !broker || !connectedBrokers().includes(broker) || !Number.isSafeInteger(positionId) || positionId < 0) {
         showResult(root, "Выберите подключённый брокер этой Paper-позиции для закрытия.", true);
         return;
       }
@@ -290,6 +295,7 @@
       return;
     }
     if (id === "ai-start" || id === "ai-step") {
+      if (!B.status || B.error || $(root, id)?.disabled) return;
       const broker = $(root, "ai-broker")?.value;
       if (!broker || !connectedBrokers().includes(broker)) {
         showResult(root, "Сначала подключите брокер с котировками и выберите его для Paper.", true);

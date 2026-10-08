@@ -293,7 +293,7 @@
       action.textContent = running ? text("stop") : text(state.config?.mode === "money" ? "Start Money trading" : "Start Paper trading");
       action.dataset.run = running ? "stop" : "start";
       action.classList.toggle("is-stop", running);
-      action.disabled = !running && ((busy && !running) || !state.loaded || !state.config?.ai_enabled || (state.config?.mode === "money" && !status.money_armed));
+      action.disabled = !running && ((busy && !running) || state.statusUnavailable || !state.loaded || !state.config?.ai_enabled || (state.config?.mode === "money" && !status.money_armed));
     }
     const hasPosition = !!status.position;
     const lock = running || busy || hasPosition;
@@ -316,7 +316,7 @@
     const save = root.querySelector('[data-action="save"]');
     if (save) save.disabled = lock || !state.loaded;
     const start = root.querySelector('[data-action="run"]');
-    if (start) start.disabled = !running && ((busy && !running) || !state.loaded || !state.config?.ai_enabled || (state.config?.mode === "money" && !status.money_armed));
+    if (start) start.disabled = !running && ((busy && !running) || state.statusUnavailable || !state.loaded || !state.config?.ai_enabled || (state.config?.mode === "money" && !status.money_armed));
     root.querySelector("[data-quote]").innerHTML = `<h3>${esc(text("quote"))}</h3>${sampleMarkup(status.sample)}`;
     root.querySelector("[data-frames]").innerHTML = `<h3>${esc(text("frames_live"))}</h3>${framesMarkup(status.frames)}`;
     root.querySelector("[data-decision]").innerHTML = `<h3>${esc(text("decision"))}</h3>${decisionMarkup(status.last_decision)}`;
@@ -412,8 +412,10 @@
     state.refreshing = true;
     try {
       state.status = await invoke("observer_status");
+      state.statusUnavailable = false;
       state.error = "";
     } catch (error) {
+      state.statusUnavailable = true;
       state.error = String(error?.message || error);
       const node = root.querySelector("[data-status-line]");
       if (node) node.innerHTML = `<span class="obs-status-dot"></span><strong>${esc(text("error"))}</strong><span class="obs-status-error">${esc(state.error)}</span>`;

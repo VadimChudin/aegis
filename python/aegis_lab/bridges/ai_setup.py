@@ -123,26 +123,32 @@ def _latest_archive_url():
 
 
 def _download(url, destination, expected_size, expected_digest=None):
-    partial = destination.with_suffix(destination.suffix + ".part")
+    if not isinstance(expected_size, int) or expected_size <= 0 or expected_size > MAX_DOWNLOAD:
+        raise SetupError("Ollama runtime archive size was invalid or exceeds the 15 GiB download limit")
+    partial = None
     try:
         with _request(url, headers={"User-Agent": "aegis-lab-ai-setup"}, timeout=60) as response:
             raw_length = response.headers.get("Content-Length")
             content_length = int(raw_length) if raw_length and raw_length.isdigit() else None
             if content_length is not None and content_length != expected_size:
                 raise SetupError("Ollama runtime archive size did not match the official release metadata")
-            if expected_size > MAX_DOWNLOAD:
-                raise SetupError("Ollama runtime archive exceeds the 15 GiB download limit")
             digest = hashlib.sha256()
             received = 0
             last_report = 0
-            with open(partial, "xb") as output:
+            # Each attempt owns its temporary file; an interrupted or concurrent
+            # download must neither block retries nor have its file deleted.
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=destination.name + ".", suffix=".part",
+                dir=str(destination.parent), delete=False,
+            ) as output:
+                partial = Path(output.name)
                 while True:
                     chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
                     received += len(chunk)
-                    if received > MAX_DOWNLOAD:
-                        raise SetupError("Ollama runtime archive exceeds the 15 GiB download limit")
+                    if received > expected_size:
+                        raise SetupError("Ollama runtime archive exceeded the official release size")
                     output.write(chunk)
                     digest.update(chunk)
                     percent = min(24, int(received * 24 / expected_size))
@@ -156,12 +162,12 @@ def _download(url, destination, expected_size, expected_digest=None):
             if expected_digest and digest.hexdigest().lower() != expected_digest.partition(":")[2].lower():
                 raise SetupError("Ollama runtime archive checksum did not match the official release")
         os.replace(partial, destination)
-    except Exception:
-        try:
-            partial.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+    finally:
+        if partial is not None:
+            try:
+                partial.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _safe_member_path(name):
@@ -304,12 +310,20 @@ def _api_json(path, payload=None, timeout=10):
             raise SetupError("The local Ollama service returned invalid data") from exc
 
 
+def _valid_tags(tags):
+    return (
+        isinstance(tags, dict)
+        and isinstance(tags.get("models"), list)
+        and all(isinstance(item, dict) and isinstance(item.get("name"), str) for item in tags["models"])
+    )
+
+
 def _model_ready():
     try:
         tags = _api_json("/api/tags")
     except SetupError:
         return False
-    return any(item.get("name") == MODEL for item in tags.get("models", []))
+    return _valid_tags(tags) and any(item["name"] == MODEL for item in tags["models"])
 
 
 def _pull_model():
@@ -319,6 +333,7 @@ def _pull_model():
     )
     started = time.monotonic()
     last_report = -1
+    succeeded = False
     try:
         response = urllib.request.urlopen(request, timeout=60)
     except (OSError, urllib.error.URLError, TimeoutError) as exc:
@@ -334,12 +349,22 @@ def _pull_model():
                 event = json.loads(line)
             except (ValueError, UnicodeDecodeError) as exc:
                 raise SetupError("The local Ollama service returned an invalid download status") from exc
+            if not isinstance(event, dict) or any(
+                key in event and (not isinstance(event[key], int) or isinstance(event[key], bool) or event[key] < 0)
+                for key in ("total", "completed")
+            ):
+                raise SetupError("The local Ollama service returned an invalid download status")
             if event.get("error"):
                 raise SetupError("The local Qwen3 model download failed")
             progress = _model_progress(event)
             if progress > last_report:
                 _emit("downloading_model", progress)
                 last_report = progress
+            if event.get("status") == "success":
+                succeeded = True
+                break
+    if not succeeded:
+        raise SetupError("Qwen3 model download ended without a success status")
     if not _model_ready():
         raise SetupError("Qwen3 model download finished without a ready model")
 
@@ -356,6 +381,10 @@ def setup(root):
     _supported_platform()
     root = _ensure_root(root)
     _emit("checking_runtime", 0)
+    # HTTP tags cannot identify the server's OLLAMA_MODELS directory. Never
+    # reuse an unowned service or download into its possibly global store.
+    if _api_reachable():
+        raise SetupError("An Ollama service is already running; stop it before project-local setup")
     binary = runtime_binary(root)
     if not binary:
         _install_runtime(root)
@@ -364,24 +393,19 @@ def setup(root):
         raise SetupError("Ollama runtime is not available after installation")
     binary = _ensure_runtime_entrypoint(root, binary)
 
-    if _model_ready():
-        _emit("ready", 100)
-        return
-
     env = os.environ.copy()
     env.update(runtime_environment(root))
     owned = False
     process = None
     try:
-        if not _api_reachable():
-            _emit("starting_runtime", 24)
-            process = subprocess.Popen(
-                [binary, "serve"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True,
-            )
-            owned = True
-            if not _wait_for_api(process):
-                raise SetupError("The local Ollama service did not start")
+        _emit("starting_runtime", 24)
+        process = subprocess.Popen(
+            [binary, "serve"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        owned = True
+        if not _wait_for_api(process):
+            raise SetupError("The local Ollama service did not start")
         if _model_ready():
             _emit("ready", 100)
             return
@@ -406,8 +430,7 @@ def setup(root):
 
 def _api_reachable():
     try:
-        _api_json("/api/tags")
-        return True
+        return _valid_tags(_api_json("/api/tags"))
     except SetupError:
         return False
 
@@ -418,7 +441,7 @@ def _wait_for_api(process):
         if process.poll() is not None:
             return False
         if _api_reachable():
-            return True
+            return process.poll() is None
         time.sleep(1)
     return False
 
