@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.7.0-beta.5 — Audit and Paper telemetry prerelease
+
+- Audited local AI startup/recovery and bounded decision reliability fixes.
+- Opt-in Paper event telemetry score gate and outcomes, bounded raw samples and practical
+  hour windows; telemetry invalidated after MT5 source changes.
+- Permanent Paper archive, cumulative partial-exit PnL and refreshed weekly reports.
+- Consistent workspace/core/app package versions; Rust, Python and Node release tests on
+  all three platforms before publication. Windows NSIS, Linux DEB and universal macOS DMG.
+- Experimental prerelease only: Paper default, Money default off. Fixtures and CPU Qwen
+  deadline checks do not establish broker/demo or real-money acceptance. See
+  `docs/release-beta5.md` for verification limits and the all-platform draft publication gate.
+- Point 6: event-bound read-only tick/book tools, finite local-model slice selection with bounded fallback, authorized MT5 historical ticks, observed-archive book slices and evidence passed to local score/cloud review. Missing/truncated history stays explicit; no arbitrary URLs or reconstructed DOM.
+
+## 0.7.0-beta.4 — Technical reliability fixes
+
+- Stop occupies a measured header slot instead of overlapping Brokers, including at minimum
+  window size; it remains clickable above settings. Pending position-close requests stay
+  locked through status polling, and detached settings do not receive UI updates.
+- Stale closed-candle frames and gaps in the recent 21-bar decision window are rejected;
+  fresh quotes no longer make outdated strategy context usable.
+- MT5 accepted-but-unsettled PLACED replies are unknown, not rejected. Exceptions before
+  order_send are rejected without an ambiguous-send lock; failures after dispatch fail closed.
+- RETURN filling is supported for non-Market execution when IOC/FOK is unavailable. Invalid
+  JSON request shapes no longer crash the bridge; raw non-JSON input is not printed to logs.
+- Regression Node tests for repeat closes and foreign-position exclusion now run in CI.
+
+## 0.7.0-beta.3 — Unified AI / MT5 execution preview
+
+- One Settings → AI tab, five original strategy slots and JSON SPA editors. Editing SPA
+  stops new decisions; per-strategy risk and daily-loss settings persist independently.
+- Explicit session-only Money confirmation, Paper default, fixed Fable5 OpenRouter consultation
+  and agreement on all executable parameters. No application spend budget; requests remain
+  size/deadline/concurrency bounded and provider diagnostics are billable and opt-in.
+- MT5 account balance/equity/free margin/profit and owned XAUUSD positions, chart entry/SL/TP
+  lines, market close/close-all, partial reductions and tightening stops. Scoped to AEGIS magic.
+- Broker lot sizing, order_check, stop distances, permissions, margin and risk gates; durable
+  account-scoped execution intent prevents blind retries after uncertain/partial outcomes.
+- Stop/Save execution barrier, account-bound Money arming, random installation encryption key
+  with legacy credential migration, bounded chart/log buffers and non-overlapping status polling.
+- Live execution is implemented but NOT validated on a real RoboForex Windows account. This
+  preview requires Windows demo acceptance before client deployment; no profitability guarantee.
+
+## 0.7.0-beta.2 — RoboForex AI Observer
+
+- Autonomous, read-only RoboForex MT5 `XAUUSD` observation with independent quote sampling,
+  six closed-candle timeframe summaries and deadline-bound local Qwen JSON analysis.
+- Density bounce, SMC/structural reversal, breakout and liquidity sweep: per-strategy prompts,
+  enable switches, timeframe selection and a global 0–100 adherence slider. Strict mode
+  requires rule evidence and built-in mechanical checks; lower values permit extra timeframes
+  without disabling risk, freshness, spread or stop validation.
+- Missing MT5 depth falls back explicitly to quotes, ticks and price levels; CFD tick volume
+  is never presented as exchange tape or genuine resting liquidity.
+- Automatic snapshot/decision/outcome JSONL journal, bounded single-position simulation with
+  spread, configurable commissions/slippage, protective quote marking and restart recovery.
+  Auto is always off after restart. No real orders, training of model weights or new cloud calls.
+
+- **Local AI:** install and extract a checksum-verified official Ollama runtime, download
+  Qwen3 8B with progress, start/stop a loopback-only server and test real local inference.
+  A dedicated panel shows runtime, model and CPU/GPU status without broker credentials.
+- **Experience memory:** save confirmed strategy observations and lessons, retrieve them in
+  local answers, delete individual records and export a JSONL dataset. This is persistent
+  retrieval memory, not model-weight training, live market monitoring or order execution.
+
+## 0.7.0-beta.1 — Experimental AI Paper
+
+- Linux user-local Ollama/Qwen3-8B setup with progress, safe extraction and model download.
+- Local JSON decisions and optional single OpenRouter consultation, encrypted key storage,
+  connection tests, persistent request quotas and conservative cost reservations.
+- Strategy preprompts, simulated positions, aggregate risk/leverage/daily-loss limits,
+  independent quote-based stops, manual close, journal and restart recovery.
+- Russian AI Paper panel. No real orders, live MT5 execution, scheduled email reports or
+  Windows/macOS automatic model installation. See `docs/ai-paper.md` for exact limits.
+
+## 0.6.1 — 2026-10-01
+
+- Compact red setup button and an explicit “Add my setup” form with unique names and persistent parameter snapshots; the orange research paragraph is replaced by a collapsed neutral disclosure.
+- **Experimental structural reversal:** a separate strategy panel with 31 sliders/toggles, saved parameters and custom presets, inclusive date selection and cached native Bybit trade-archive loading (up to 184 complete days). Prior-day raid → reclaim → structure confirmation, market or limit-retest entry, stops, time exits, original mapped targets, cost and remaining reward/risk gates.
+- **Red “Setup 1 + · +0.85R / 5 trades” preset:** reproduces the retrospective April–September 2026 diagnostic. Clearly labelled exploratory, with cost filter off; not a proven edge. Current backtest results, stale-settings warning, R equity, monthly results, latest trades and rejection counts are separate from the historical badge. No live orders, FIFO, funding or liquidation claims.
+- Keeps the v0.6.0 density screener. Rules and assumptions: `docs/structural-reversal.md`.
+
+## 0.6.0 — 2026-09-30
+
+- **Gold-density screener:** a separate Glass window opens beside the terminal at startup, follows its movement and size, and can be hidden/reopened or detached and magnetically reattached. It shares the terminal's theme and language.
+- **Broker-specific order books:** monitors the active connected source's gold instrument on Binance futures, Bybit linear or RoboForex MT5. Missing MT5 DOM is shown as unavailable, never substituted with candles or another venue's book. Invalid, crossed and stale snapshots are rejected.
+- **Density observations:** price, side, size, strength relative to side median, observed age, sampled distinct touches/reactions and an observational score. The score is not a calibrated authenticity or bounce probability. No live orders are placed.
+- **Continuous recording:** sampled densities and events are saved in rotating 16 MiB JSONL files under the application data folder, even while the screener is hidden. Recording errors are surfaced; tracking resets on source/session changes or gaps. Old files are not automatically deleted.
+- **Documentation and development:** complete Bounce setting inventory and screener rules in `docs/density-screener.md`, reproducible Linux setup, and an explicitly offline browser Preview. Native interaction verified on Linux with test brokers; real MT5 DOM and Windows/macOS window behavior still require live validation.
+
 ## 0.5.1 — 2026-09-29
 
 - **Fix (Brokers):** the broker form stays usable while a connection check runs: the typed values are kept, only the Connect button shows *Connecting…*, and every label is linked to its field.

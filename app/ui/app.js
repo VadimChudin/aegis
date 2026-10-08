@@ -17,11 +17,13 @@
     timeframes: [],
     settings: null, // PublicSettings
     sessions: {}, // broker id → AccountSummary
+    account: null,
     reports: {}, // broker id → last ConnectReport of this run
     bars: [],
     busy: {},
     openCard: null,
     panel: null,
+    settingsTab: "appearance",
     chart: { broker: null, tf: "15m", generation: 0, lastTime: 0, wanted: null, request: 0, error: null },
   };
 
@@ -58,6 +60,15 @@
     const down = css("--candle-down");
     candles.applyOptions({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down });
     volumes.setData(S.bars.map(volBar));
+  }
+
+  function densityButtonLabel() {
+    const lang = window.I18N.lang;
+    return lang === "ru" ? "Плотности" : lang === "kk" ? "Тығыздықтар" : "Densities";
+  }
+
+  function selectDensitySource(broker) {
+    invoke("density_select", { broker }).catch((err) => log(`Density source: ${err}`, "warn"));
   }
 
   // ---- chart ------------------------------------------------------------------
@@ -132,6 +143,8 @@
     if (S.btView) window.AEGIS.bounce?.leaveBacktestView(true);
     const request = ++S.chart.request;
     S.chart.broker = broker;
+    if (broker !== "roboforex") window.AEGIS.observer?.syncChartStatus({});
+    selectDensitySource(broker);
     const tf = S.chart.tf;
     S.chart.error = null;
     S.chart.generation = -1;
@@ -164,6 +177,8 @@
   async function stopChart() {
     ++S.chart.request;
     S.chart.broker = null;
+    window.AEGIS.observer?.syncChartStatus({});
+    selectDensitySource(null);
     S.chart.error = null;
     S.chart.generation = -1;
     await invoke("stop_chart");
@@ -293,6 +308,7 @@
     $("statBrokers").textContent = `${connected.length} / ${S.order.length}`;
     $("statChart").textContent = info ? `${info.name} · ${session.symbol}` : "—";
     $("btnBrokers").hidden = connected.length > 0;
+    if (S.positionStop) requestAnimationFrame(S.positionStop);
 
     const empty = (!b || S.chart.error) && !S.btView;
     $("empty").hidden = !empty;
@@ -311,17 +327,26 @@
   }
 
   function renderStrategies(list) {
+    const original = [
+      ["bounce", "Bounce"], ["structural", "Structural"], ["liquidity_sweep", "Liquidity Sweep"], ["data", "DATA"], ["breakout", "Breakout"],
+    ];
+    const available = new Map((list || []).map((strategy) => [strategy.id, strategy]));
     $("strategyList").replaceChildren(
-      ...list.map((s) => {
+      ...original.map(([id, label]) => {
         const chip = document.createElement("button");
         chip.type = "button";
-        const ready = s.status !== "stub";
+        chip.className = "strategy-chip";
+        const strategy = available.get(id);
+        const ready = S.aiEnabled || strategy?.status === "backtest";
+        const title = label;
         chip.className = `strategy-chip${ready ? "" : " soon"}`;
-        chip.dataset.strategy = s.id;
-        chip.title = ready ? t(s.summary) : `${t(s.summary)} ${t("Coming in a later version.")}`;
-        chip.innerHTML = `<span></span><span class="v-opt-tag">${esc(t(ready ? "backtest" : "soon"))}</span>`;
-        chip.firstChild.textContent = t(s.name);
-        if (ready) chip.onclick = () => openPanel(s.id);
+        chip.dataset.strategy = id;
+        chip.title = strategy ? (ready ? t(strategy.summary) : `${t(strategy.summary)} ${t("Coming in a later version.")}`) : title;
+        chip.innerHTML = `<span>${esc(t(title))}</span><span class="v-opt-tag">${S.aiEnabled ? "SPA" : esc(t(ready ? "backtest" : "soon"))}</span>`;
+        chip.onclick = async () => {
+          if (window.AEGIS.observer && await window.AEGIS.observer.isEnabled()) openPanel("observer_strategy", id);
+          else if (ready && (id === "bounce" || id === "structural")) openPanel(id);
+        };
         return chip;
       }),
     );
@@ -355,6 +380,13 @@
     S.settings = await invoke("settings_get");
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel(id);
+    if (id === "roboforex" && S.sessions.roboforex) {
+      try {
+        const account = await invoke("observer_account");
+        updateAccountDock(account);
+        window.AEGIS.observer?.syncChartStatus({ account });
+      } catch { updateAccountDock(null); }
+    }
     await ensureChart();
   }
 
@@ -412,8 +444,10 @@
     $("panel").classList.remove("wide", "strategy");
     $("backdrop").hidden = true;
     $("panelBody").replaceChildren();
+    $("panelBody").classList.remove("lai-panel-body");
     document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.remove("active"));
     S.panel = null;
+    S.strategyFocus = null;
     document.body.classList.remove("panel-open");
     document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("on", b.dataset.panel === "chart"));
   }
@@ -422,6 +456,8 @@
     openSheet(false);
     closeMenus();
     S.panel = kind;
+    if (kind === "observer_strategy") S.strategyFocus = focus;
+    $("panelBody").classList.remove("lai-panel-body");
     document.body.classList.add("panel-open");
     $("panel").hidden = false;
     $("backdrop").hidden = false;
@@ -437,9 +473,24 @@
       $("panel").classList.add("wide", "strategy");
       document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
       window.AEGIS.bounce.render($("panelBody"));
+    } else if (kind === "observer_strategy" && window.AEGIS.observer) {
+      const strategyTitle = focus === "structural" ? "Structural" : focus === "bounce" || focus === "density_bounce" ? "Bounce" : S.strategies?.find((item) => item.id === focus)?.name || focus || "Strategy";
+      $("panelTitle").textContent = t(strategyTitle);
+      $("panel").classList.add("wide");
+      window.AEGIS.observer.renderStrategy($("panelBody"), focus);
+    } else if (kind === "structural" && window.AEGIS.structural) {
+      $("panelTitle").textContent = t("Structural reversal");
+      $("panel").classList.add("wide", "strategy");
+      document.querySelectorAll(".strategy-chip").forEach((c) => c.classList.toggle("active", c.dataset.strategy === kind));
+      window.AEGIS.structural.render($("panelBody"));
+    } else if (kind === "ai" && window.AEGIS.ai) {
+      $("panelTitle").textContent = "AI · Paper";
+      $("panel").classList.add("wide");
+      window.AEGIS.ai.render($("panelBody"));
     } else if (kind === "theme") {
       $("panelTitle").textContent = t("Settings");
-      $("panel").classList.remove("wide");
+      $("panel").classList.add("wide");
+      S.settingsTab = "appearance";
       renderThemePanel();
     }
   }
@@ -581,14 +632,28 @@
   function renderThemePanel() {
     const current = S.settings.theme;
     const lang = window.I18N.lang;
-    $("panelBody").innerHTML = `<div class="field"><label>${esc(t("Language"))}</label></div><div class="lang-row" id="langRow">${window.I18N.LANGS.map(
+    $("panelBody").innerHTML = `<nav class="settings-tabs" aria-label="${esc(t("Settings"))}"><button type="button" class="settings-tab${S.settingsTab === "appearance" ? " on" : ""}" data-settings-tab="appearance">${esc(t("Appearance"))}</button><button type="button" class="settings-tab${S.settingsTab === "ai" ? " on" : ""}" data-settings-tab="ai">AI</button></nav><div id="settingsContent"></div>`;
+    const content = $("settingsContent");
+    if (S.settingsTab === "ai") {
+      content.innerHTML = `<div data-ai-settings></div><section class="settings-local-ai"><h3>${esc(t("Local AI"))}</h3><div data-local-ai></div></section>`;
+      window.AEGIS.observer?.renderSettings(content.querySelector("[data-ai-settings]"));
+      window.AEGIS.localAI?.render(content.querySelector("[data-local-ai]"));
+    } else {
+      content.innerHTML = `<div class="field"><label>${esc(t("Language"))}</label></div><div class="lang-row" id="langRow">${window.I18N.LANGS.map(
       ([id, name]) => `<button type="button" class="ghost sm${id === lang ? " on" : ""}" data-lang="${id}">${esc(name)}</button>`,
     ).join("")}</div>
       <div class="field"><label>${esc(t("Theme"))}</label></div><div class="theme-grid" id="themeGrid">${THEMES.map(
       ([id, name]) => `<button type="button" class="theme-card${id === current ? " on" : ""}" data-theme="${id}">
         <span class="theme-swatch" data-swatch="${id}"><i></i><i></i><i></i></span><span class="theme-name">${esc(t(name))}</span></button>`,
     ).join("")}</div><p class="hint">AEGIS v${esc(S.version)} · ${esc(t("settings are stored on this computer."))}</p>`;
-    $("themeGrid").querySelectorAll(".theme-card").forEach((b) => {
+    }
+    $("panelBody").querySelectorAll("[data-settings-tab]").forEach((button) => {
+      button.onclick = () => {
+        S.settingsTab = button.dataset.settingsTab;
+        renderThemePanel();
+      };
+    });
+    content.querySelectorAll(".theme-card").forEach((b) => {
       b.onclick = async () => {
         S.settings.theme = b.dataset.theme;
         applyTheme(b.dataset.theme);
@@ -596,7 +661,7 @@
         await invoke("set_theme", { theme: b.dataset.theme });
       };
     });
-    $("langRow").querySelectorAll("[data-lang]").forEach((b) => {
+    content.querySelectorAll("[data-lang]").forEach((b) => {
       b.onclick = async () => {
         await setLang(b.dataset.lang, true);
         renderThemePanel();
@@ -608,13 +673,19 @@
   async function setLang(lang, persist) {
     window.I18N.set(lang);
     S.settings.lang = window.I18N.lang;
+    $("btnDensities").textContent = densityButtonLabel();
+    $("btnDensities").title = window.I18N.lang === "ru" ? "Скринер плотностей" : window.I18N.lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
     if (persist) await invoke("set_lang", { lang: window.I18N.lang });
     renderStrategies(S.strategies || []);
     renderChartChrome();
     if (S.panel === "brokers") renderBrokersPanel();
     if (S.panel === "bounce" && window.AEGIS.bounce) window.AEGIS.bounce.render($("panelBody"));
-    const titles = { brokers: "Brokers", bounce: "Bounce", theme: "Settings" };
+    if (S.panel === "theme") renderThemePanel();
+    if (S.panel === "observer_strategy" && window.AEGIS.observer) window.AEGIS.observer.renderStrategy($("panelBody"), S.strategyFocus);
+    if (S.panel === "structural" && window.AEGIS.structural) window.AEGIS.structural.render($("panelBody"));
+    const titles = { brokers: "Brokers", bounce: "Bounce", structural: "Structural reversal", theme: "Settings" };
     if (S.panel && titles[S.panel]) $("panelTitle").textContent = t(titles[S.panel]);
+    if (S.panel === "observer_strategy") $("panelTitle").textContent = t(S.strategyFocus === "structural" ? "Structural" : ["bounce", "density_bounce"].includes(S.strategyFocus) ? "Bounce" : S.strategies?.find((item) => item.id === S.strategyFocus)?.name || S.strategyFocus);
   }
 
   // ---- live feed ----------------------------------------------------------------
@@ -630,6 +701,7 @@
       volumes.update(volBar(c));
       if (S.bars.length && S.bars[S.bars.length - 1].time === c.time) S.bars[S.bars.length - 1] = c;
       else S.bars.push(c);
+      if (S.bars.length > 1000) S.bars.splice(0, S.bars.length - 1000);
       S.chart.lastTime = c.time;
       showLast(c);
     });
@@ -640,27 +712,75 @@
     });
   }
 
+  function updateAccountDock(account) {
+    const dock = $("aiAccount");
+    if (!dock) return;
+    if (!S.sessions.roboforex || !account) {
+      S.account = null;
+      dock.hidden = true;
+      return;
+    }
+    S.account = account;
+    const values = account.account || account;
+    dock.hidden = false;
+    $("aiAccountValue").textContent = `${Number(values.balance || 0).toFixed(2)} · P/L ${Number(values.profit || 0).toFixed(2)} USD`;
+  }
+
   // Shared with strategy panels (bounce.js).
   window.AEGIS = {
     invoke,
     log,
     esc,
     S,
+    refreshStrategies: () => renderStrategies(S.strategies || []),
     chart,
     candles,
     volumes,
     clearChart,
     setLamp,
     closePanel,
+    openPanel,
     renderChartChrome,
     reloadLive: () => (S.chart.broker ? loadChart(S.chart.broker) : (clearChart(), setLamp("off", t("Offline")), renderChartChrome())),
+    updateAccountDock,
   };
 
   // ---- boot ---------------------------------------------------------------------
 
   async function boot() {
+    $("btnDensities").onclick = async () => {
+      if (tauri) {
+        try {
+          await invoke("density_open");
+          return;
+        } catch (err) {
+          log(`Density window: ${err}`, "warn");
+        }
+      }
+      window.open("densities.html", "aegis-densities", "popup,width=460,height=820,resizable=yes");
+    };
     if (!tauri) {
-      setLamp("halt", "Open AEGIS through the desktop app");
+      const lang = window.I18N.detect();
+      window.I18N.set(lang);
+      $("btnDensities").textContent = densityButtonLabel();
+      $("btnDensities").title = lang === "ru" ? "Скринер плотностей" : lang === "kk" ? "Тығыздықтар скринері" : "Density screener";
+      $("browserNotice").hidden = false;
+      $("browserNotice").textContent = lang === "ru"
+        ? "Предпросмотр в браузере: подключите настольное приложение для данных брокеров."
+        : lang === "kk"
+          ? "Браузердегі алдын ала көру: брокер деректері үшін жұмыс үстелі қолданбасын ашыңыз."
+          : "Browser preview only · Open the desktop app to connect broker data.";
+      $("btnBrokers").disabled = true;
+      $("btnMenu").disabled = true;
+      $("btnAiStop").disabled = true;
+      $("emptyConnect").hidden = true;
+      $("emptyText").textContent = lang === "ru"
+        ? "Просмотр не подключён к брокеру и не получает рыночные данные."
+        : lang === "kk"
+          ? "Алдын ала көру брокерге қосылмаған және нарық деректерін алмайды."
+          : "This preview is not connected to a broker and receives no market data.";
+      $("statBrokers").textContent = "—";
+      setLamp("halt", $("browserNotice").textContent);
       return;
     }
     window.addEventListener("error", (e) => log(`UI error: ${e.message}`, "bad"));
@@ -677,6 +797,7 @@
     S.chart.wanted = b.settings.chart_broker;
     applyTheme(b.settings.theme);
     S.strategies = b.strategies;
+    try { S.aiEnabled = !!(await invoke("observer_info")).config.ai_enabled; } catch { S.aiEnabled = false; }
     window.I18N.set(b.settings.lang || window.I18N.detect());
     renderStrategies(b.strategies);
     listenFeed();
@@ -690,6 +811,30 @@
       }
     });
     $("btnMenu").onclick = () => openSheet($("sheet").hidden);
+    $("btnAiStop").onclick = async () => {
+      try {
+        await invoke("observer_stop");
+        log(t("AI stopped; open positions remain protected."), "warn");
+      } catch (error) { log(`AI stop failed: ${error}`, "bad"); }
+    };
+    const stopButton = $("btnAiStop");
+    const stopSlot = document.createElement("span");
+    stopSlot.className = "stop-slot";
+    stopSlot.setAttribute("aria-hidden", "true");
+    stopButton.replaceWith(stopSlot);
+    document.body.append(stopButton);
+    const positionStop = () => {
+      stopSlot.style.width = `${stopButton.offsetWidth}px`;
+      stopSlot.style.height = `${stopButton.offsetHeight}px`;
+      const rect = stopSlot.getBoundingClientRect();
+      stopButton.style.left = `${rect.left}px`;
+      stopButton.style.top = `${rect.top}px`;
+    };
+    S.positionStop = positionStop;
+    new ResizeObserver(positionStop).observe(document.querySelector(".chrome"));
+    new ResizeObserver(positionStop).observe(stopButton);
+    window.addEventListener("resize", positionStop);
+    positionStop();
     $("sheetClose").onclick = () => openSheet(false);
     $("backdrop").onclick = () => {
       openSheet(false);
@@ -697,6 +842,7 @@
     };
     $("panelClose").onclick = closePanel;
     $("btnBrokers").onclick = () => openPanel("brokers");
+    $("btnDensities").textContent = densityButtonLabel();
     $("emptyConnect").onclick = () => (S.chart.error ? loadChart(S.chart.broker) : openPanel("brokers"));
     document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => openPanel(b.dataset.open)));
     document.querySelectorAll(".rail-item").forEach((b) => {
@@ -710,6 +856,21 @@
     saved.forEach((id) => (S.busy[id] = true));
     renderChartChrome();
     log(`AEGIS ${b.version}${saved.length ? ` · ${t("connecting")} ${saved.map((id) => S.infos[id].name).join(", ")}` : ""}`);
+    let accountRefreshBusy = false;
+    setInterval(async () => {
+      if (accountRefreshBusy) return;
+      if (!S.sessions.roboforex) { updateAccountDock(null); window.AEGIS.observer?.syncChartStatus({}); return; }
+      accountRefreshBusy = true;
+      try {
+        const status = await invoke("observer_status");
+        updateAccountDock(status.account);
+        window.AEGIS.observer?.syncChartStatus(status);
+      } catch {
+        updateAccountDock(null);
+      } finally {
+        accountRefreshBusy = false;
+      }
+    }, 3000);
     await ensureChart();
     await Promise.all(saved.map(connectSaved));
   }

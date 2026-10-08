@@ -439,6 +439,8 @@ body.mac .chrome {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
 }
 .rail-item {
   display: flex;
@@ -1397,7 +1399,40 @@ body.mac .chrome {
   display: flex;
   align-items: center;
   position: relative;
+  gap: 10px;
 }
+.density-open {
+  padding: 8px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.density-open:hover {
+  background: var(--fill-strong);
+  border-color: var(--chip-edge);
+}
+.browser-notice {
+  position: absolute;
+  z-index: 6;
+  top: 72px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  text-align: center;
+  font-size: 11px;
+}
+.browser-notice[hidden] { display: none; }
 /* out of flow, so expanding it never shifts the centred Paper/Auto switch */
 .chrome-center > .money-badge {
   position: absolute;
@@ -2011,6 +2046,18 @@ details.adv[open] > summary {
   stroke-width: 1.6;
   vector-effect: non-scaling-stroke;
 }
+
+.st-research { border:1px solid #ef4444; background:rgba(239,68,68,.12); color:#ff7272; border-radius:8px; padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+.st-research:hover { background:rgba(239,68,68,.26); }
+.st-setups { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.st-research-note { margin:8px 0; color:var(--muted); font-size:12px; }
+.st-research-note summary { cursor:pointer; }
+.st-setup-form { margin:10px 0; padding:12px; border:1px solid var(--line); border-radius:10px; }
+.st-setup-form label { display:block; margin-bottom:6px; color:var(--muted); font-size:12px; }
+.st-setup-form .bt-input { width:100%; box-sizing:border-box; }
+.st-dates { display:flex; gap:12px; margin:16px 0; }
+.st-dates label { display:flex; flex-direction:column; gap:6px; color:var(--muted); min-width:0; }
+.st-dates input { background:var(--surface); color:var(--text); padding:8px; border:1px solid var(--line); border-radius:8px; }
 .bt-equity line {
   stroke: var(--hair);
   vector-effect: non-scaling-stroke;
@@ -2148,6 +2195,200 @@ details.adv[open] > summary {
   width: 0;
   background: var(--apple);
   transition: width 0.3s ease;
+}
+
+/* ---- local AI panel -------------------------------------------------------- */
+.lai {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+.lai-intro,
+.lai-note,
+.lai-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.lai-card {
+  border: 1px solid var(--hair);
+  border-radius: 16px;
+  background: var(--fill);
+  padding: 14px;
+  min-width: 0;
+}
+.lai-card h3,
+.lai-card h4 {
+  font-size: 14px;
+  font-weight: 650;
+  margin: 0 0 10px;
+}
+.lai-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.lai-section-head h3,
+.lai-section-head h4 {
+  margin: 0;
+}
+.lai-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.lai-status-grid > div {
+  min-width: 0;
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 10px;
+}
+.lai-status-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.lai-status-grid dd {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lai-actions button:disabled,
+.lai button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+.lai-consent {
+  border-top: 1px solid var(--hair);
+  margin-top: 14px;
+  padding-top: 12px;
+  font-size: 12px;
+}
+.lai-consent summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.lai-consent p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 10px 0;
+}
+.lai-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  line-height: 1.45;
+}
+.lai-check input {
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+}
+.lai-progress {
+  margin-top: 12px;
+}
+.lai-progress-label {
+  font-size: 12px;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.lai-progress progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  accent-color: var(--apple);
+}
+.lai-error {
+  color: var(--neg);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+.lai .field textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  border: 1px solid var(--hair);
+  background: var(--fill);
+  color: var(--ink);
+  border-radius: 14px;
+  padding: 11px 12px;
+  outline: none;
+  font: inherit;
+  line-height: 1.45;
+}
+.lai .field textarea:focus,
+.lai .field input:focus {
+  border-color: color-mix(in srgb, var(--apple) 60%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--apple) 18%, transparent);
+}
+.lai-answer {
+  margin-top: 14px;
+  border-top: 1px solid var(--hair);
+  padding-top: 12px;
+}
+.lai-answer p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+.lai-answer .hint {
+  margin-bottom: 0;
+}
+.lai-memory-head {
+  margin-top: 16px;
+}
+.lai-memory-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.lai-memory {
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 10px;
+}
+.lai-memory header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.lai-memory header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lai-memory header span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.lai-memory header button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.lai-memory p {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.lai-memory p b {
+  color: var(--muted);
+}
+@media (max-width: 560px) {
+  .lai-status-grid {
+    grid-template-columns: 1fr;
+  }
+  .lai-card {
+    padding: 12px;
+  }
 }
 .bt-input {
   flex: 1 1 120px;

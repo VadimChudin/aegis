@@ -6,16 +6,18 @@ use std::{path::Path, process::Stdio, time::Duration};
 
 use serde_json::{json, Value};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::Mutex,
     time::timeout,
 };
 
 use crate::{
-    broker::{require, BrokerError, Probe},
+    broker::{require, BrokerError, Probe, TradeRequest, TradeResult, TradingState},
     checks::{Check, Checklist},
+    live_market::MarketSample,
     market::{Candle, Timeframe},
+    market_depth::OrderBookSnapshot,
 };
 
 const PROTOCOL: i64 = 1;
@@ -25,13 +27,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 struct Io {
     child: Child,
     stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
+    lines: BufReader<ChildStdout>,
     next_id: u64,
 }
 
 pub struct Mt5Bridge {
     io: Mutex<Io>,
     symbol: String,
+    raw_symbol: String,
 }
 
 fn default_python() -> &'static str {
@@ -75,6 +78,7 @@ impl Mt5Bridge {
             Ok(io) => Mt5Bridge {
                 io: Mutex::new(io),
                 symbol: String::new(),
+                raw_symbol: String::new(),
             },
             Err(e) => {
                 list.fail("python", "Python", e.to_string());
@@ -164,6 +168,7 @@ impl Mt5Bridge {
         let symbol = result["symbol"]
             .as_str()
             .ok_or_else(|| BrokerError::Bridge(format!("connect reply without symbol: {result}")))?;
+        self.raw_symbol = symbol.to_string();
         self.symbol = symbol.to_string();
         Ok(result)
     }
@@ -180,6 +185,116 @@ impl Mt5Bridge {
             )
             .await?;
         serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 candles: {e}")))
+    }
+
+    pub(crate) async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
+        let result = self.request(json!({"cmd": "order_book"}), REQUEST_TIMEOUT).await?;
+        let snapshot: OrderBookSnapshot =
+            serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 order book: {e}")))?;
+        snapshot
+            .validate()
+            .map_err(|e| BrokerError::Parse(format!("MT5 order book: {e}")))?;
+        Ok(snapshot)
+    }
+
+    pub(crate) async fn market_sample(&self) -> Result<MarketSample, BrokerError> {
+        let result = self.request(json!({"cmd": "market_snapshot"}), REQUEST_TIMEOUT).await?;
+        let sample: MarketSample =
+            serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 market snapshot: {e}")))?;
+        if sample.symbol != self.raw_symbol {
+            return Err(BrokerError::Parse("Market snapshot symbol changed".into()));
+        }
+        sample
+            .validate(crate::sign::now_ms().max(0) as u64)
+            .map_err(|e| BrokerError::Parse(format!("MT5 market snapshot: {e}")))?;
+        Ok(sample)
+    }
+
+    pub(crate) async fn history_ticks(
+        &self,
+        start_ms: u64,
+        end_ms: u64,
+        max_ticks: usize,
+    ) -> Result<crate::event_tools::HistoryTicks, BrokerError> {
+        crate::event_tools::validate_history_request(start_ms, end_ms, max_ticks, crate::sign::now_ms().max(0) as u64)
+            .map_err(BrokerError::Input)?;
+        // Python binds the actual terminal symbol and checks account/server before and after.
+        let result = self.request(json!({"cmd":"history_ticks","start_ms":start_ms,"end_ms":end_ms,"max_ticks":max_ticks,"symbol":self.raw_symbol}), Duration::from_secs(2)).await?;
+        if serde_json::to_vec(&result)
+            .map_err(|e| BrokerError::Parse(e.to_string()))?
+            .len()
+            > 384 * 1024
+        {
+            return Err(BrokerError::Parse("MT5 history reply exceeds byte budget".into()));
+        }
+        let mut history: crate::event_tools::HistoryTicks =
+            serde_json::from_value(result).map_err(|e| BrokerError::Parse(e.to_string()))?;
+        // MT5 exposes the raw broker suffix; normalize only the connected XAUUSD family.
+        if !self.symbol.starts_with("XAUUSD") || history.symbol != self.raw_symbol {
+            return Err(BrokerError::Parse(
+                "Historical symbol does not match connected XAUUSD".into(),
+            ));
+        }
+        let raw_symbol = history.symbol.clone();
+        history
+            .validate(
+                &raw_symbol,
+                start_ms,
+                end_ms,
+                max_ticks,
+                crate::sign::now_ms().max(0) as u64,
+            )
+            .map_err(BrokerError::Parse)?;
+        history.coverage_note = format!("raw_symbol={raw_symbol}; {}", history.coverage_note);
+        history.symbol = "XAUUSD".into();
+        Ok(history)
+    }
+
+    pub(crate) async fn trading_state(&self) -> Result<TradingState, BrokerError> {
+        let value = self.request(json!({"cmd": "trading_state"}), REQUEST_TIMEOUT).await?;
+        serde_json::from_value(value).map_err(|e| BrokerError::Parse(format!("MT5 trading state: {e}")))
+    }
+
+    pub(crate) async fn place_order(&self, request: &TradeRequest) -> Result<TradeResult, BrokerError> {
+        let mut value =
+            serde_json::to_value(request).map_err(|e| BrokerError::Parse(format!("MT5 trade request: {e}")))?;
+        value["cmd"] = json!("place_order");
+        let result = self.request(value, REQUEST_TIMEOUT).await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 trade result: {e}")))
+    }
+
+    pub(crate) async fn close_position(&self, ticket: u64) -> Result<TradeResult, BrokerError> {
+        self.reduce_position(ticket, 1.0).await
+    }
+
+    pub(crate) async fn close_all(&self) -> Result<Vec<TradeResult>, BrokerError> {
+        let result = self.request(json!({"cmd": "close_all"}), REQUEST_TIMEOUT).await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 close-all result: {e}")))
+    }
+
+    pub(crate) async fn reduce_position(&self, ticket: u64, fraction: f64) -> Result<TradeResult, BrokerError> {
+        let result = self
+            .request(
+                json!({"cmd": "reduce_position", "ticket": ticket, "fraction": fraction}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 reduce result: {e}")))
+    }
+
+    pub(crate) async fn modify_stop(
+        &self,
+        ticket: u64,
+        stop: f64,
+        target: Option<f64>,
+    ) -> Result<TradeResult, BrokerError> {
+        let result = self
+            .request(
+                json!({"cmd": "modify_stop", "ticket": ticket, "stop": stop, "target": target}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| BrokerError::Parse(format!("MT5 stop update: {e}")))
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -201,7 +316,7 @@ impl Mt5Bridge {
 
         let read = async {
             loop {
-                let Some(line) = io.lines.next_line().await.map_err(|e| gone(&e))? else {
+                let Some(line) = bounded_line(&mut io.lines).await? else {
                     return Err(BrokerError::Bridge("the bridge process exited".into()));
                 };
                 let Ok(reply) = serde_json::from_str::<Value>(&line) else {
@@ -223,6 +338,32 @@ impl Mt5Bridge {
         timeout(wait, read)
             .await
             .map_err(|_| BrokerError::Bridge(format!("no reply within {}s", wait.as_secs())))?
+    }
+}
+
+async fn bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<Option<String>, BrokerError> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await.map_err(|e| gone(&e))?;
+        if chunk.is_empty() {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(BrokerError::Bridge("Incomplete bridge reply".into()))
+            };
+        }
+        let count = chunk.iter().position(|x| *x == b'\n').map_or(chunk.len(), |n| n + 1);
+        if bytes.len() + count > 384 * 1024 {
+            return Err(BrokerError::Bridge("Bridge reply exceeds bounded line budget".into()));
+        }
+        let done = chunk[count - 1] == b'\n';
+        bytes.extend_from_slice(&chunk[..count]);
+        reader.consume(count);
+        if done {
+            return String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| BrokerError::Parse("Bridge reply is not UTF-8".into()));
+        }
     }
 }
 
@@ -260,7 +401,7 @@ fn spawn(python: &str, script: &Path) -> Result<Io, BrokerError> {
     Ok(Io {
         child,
         stdin,
-        lines: BufReader::new(stdout).lines(),
+        lines: BufReader::new(stdout),
         next_id: 0,
     })
 }

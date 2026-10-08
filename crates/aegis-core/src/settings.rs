@@ -1,14 +1,16 @@
 //! Settings file (`settings.json` in the app config dir).
 //!
 //! Every credential field is stored encrypted (AES-256-GCM, `enc:v1:` prefix)
-//! with a key derived from this computer's host and user name, so a copied
-//! file does not open elsewhere. It does not protect against software running
-//! as the same user. Secret fields never leave this module towards the window.
+//! with a random key stored beside this file as `settings.key`. On Unix the key
+//! file is owner-only; Windows uses the config directory's inherited ACL. This
+//! is local-file protection, not an OS key vault, and does not protect against
+//! software running as the same user. Secret fields never leave this module
+//! towards the window.
 
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -55,6 +57,8 @@ pub struct Settings {
     /// Strategy id → its settings (sliders and toggles), as JSON.
     #[serde(default)]
     pub strategies: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    ai_key: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -74,6 +78,7 @@ impl Default for Settings {
             lang: String::new(),
             brokers: BTreeMap::new(),
             strategies: BTreeMap::new(),
+            ai_key: None,
         }
     }
 }
@@ -104,6 +109,7 @@ pub struct SettingsStore {
     path: PathBuf,
     cipher: Aes256Gcm,
     data: Settings,
+    key_error: Option<String>,
 }
 
 fn machine_key() -> [u8; 32] {
@@ -120,21 +126,47 @@ fn machine_key() -> [u8; 32] {
 impl SettingsStore {
     /// Loads the file; a missing file gives defaults, a corrupt one is kept as `.bad`.
     pub fn open(path: impl Into<PathBuf>) -> Self {
-        Self::open_with_key(path, machine_key())
+        let path = path.into();
+        let (data, settings_error) = read_settings(&path);
+        let settings_existed = path.exists();
+        let (key, created, key_error) = match load_or_create_key(&path) {
+            Ok((key, created)) => (key, created, None),
+            Err(error) => ([0; 32], false, Some(error.to_string())),
+        };
+        let mut store = SettingsStore {
+            path,
+            cipher: cipher_for(&key),
+            data,
+            key_error,
+        };
+
+        if settings_existed && created && store.key_error.is_none() {
+            let legacy_cipher = cipher_for(&machine_key());
+            if store.migrate_legacy(&legacy_cipher).is_err() {
+                store.key_error = Some("legacy credentials could not be migrated".into());
+            } else if store.has_encrypted_values() {
+                if let Err(error) = store.save() {
+                    store.key_error = Some(format!("could not save migrated settings: {error}"));
+                }
+            }
+        } else if store.key_error.is_none() && store.has_unreadable_secrets() {
+            store.key_error = Some("stored credentials could not be decrypted".into());
+        }
+        if let Some(error) = settings_error {
+            log::warn!("settings: {error}");
+        }
+        store
     }
 
     pub fn open_with_key(path: impl Into<PathBuf>, key: [u8; 32]) -> Self {
         let path = path.into();
-        let data = match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                log::warn!("settings: {e}; starting from defaults");
-                let _ = fs::rename(&path, path.with_extension("json.bad"));
-                Settings::default()
-            }),
-            Err(_) => Settings::default(),
-        };
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-        SettingsStore { path, cipher, data }
+        let (data, _) = read_settings(&path);
+        SettingsStore {
+            path,
+            cipher: cipher_for(&key),
+            data,
+            key_error: None,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -163,6 +195,18 @@ impl SettingsStore {
 
     pub fn strategy(&self, id: &str) -> Option<&serde_json::Value> {
         self.data.strategies.get(id)
+    }
+
+    pub fn ai_key(&self) -> Option<String> {
+        self.data.ai_key.as_deref().and_then(|value| self.decrypt(value))
+    }
+
+    pub fn set_ai_key(&mut self, value: &str) {
+        self.data.ai_key = Some(self.encrypt(value));
+    }
+
+    pub fn forget_ai_key(&mut self) {
+        self.data.ai_key = None;
     }
 
     pub fn set_chart(&mut self, broker: Option<BrokerId>, timeframe: Timeframe) {
@@ -269,8 +313,13 @@ impl SettingsStore {
 
     /// Atomic write (temp file + rename), readable by the owner only.
     pub fn save(&self) -> std::io::Result<()> {
+        if let Some(error) = &self.key_error {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, error.clone()));
+        }
         if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
+            if !dir.as_os_str().is_empty() {
+                fs::create_dir_all(dir)?;
+            }
         }
         let tmp = self.path.with_extension("json.tmp");
         {
@@ -300,14 +349,152 @@ impl SettingsStore {
     }
 
     fn decrypt(&self, stored: &str) -> Option<String> {
-        let blob = hex::decode(stored.strip_prefix(PREFIX)?).ok()?;
-        if blob.len() < 12 {
-            return None;
-        }
-        let (nonce, sealed) = blob.split_at(12);
-        let plain = self.cipher.decrypt(Nonce::from_slice(nonce), sealed).ok()?;
-        String::from_utf8(plain).ok()
+        decrypt_with(&self.cipher, stored)
     }
+
+    fn has_encrypted_values(&self) -> bool {
+        self.data
+            .brokers
+            .values()
+            .any(|broker| broker.fields.values().any(|value| value.starts_with(PREFIX)))
+            || self
+                .data
+                .ai_key
+                .as_deref()
+                .is_some_and(|value| value.starts_with(PREFIX))
+    }
+
+    fn has_unreadable_secrets(&self) -> bool {
+        self.data
+            .brokers
+            .values()
+            .any(|broker| broker.fields.values().any(|value| self.decrypt(value).is_none()))
+            || self
+                .data
+                .ai_key
+                .as_deref()
+                .is_some_and(|value| self.decrypt(value).is_none())
+    }
+
+    fn migrate_legacy(&mut self, legacy_cipher: &Aes256Gcm) -> Result<(), ()> {
+        let mut migrated = self.data.clone();
+        for broker in migrated.brokers.values_mut() {
+            for value in broker.fields.values_mut() {
+                let plain = if value.starts_with(PREFIX) {
+                    decrypt_with(legacy_cipher, value).ok_or(())?
+                } else {
+                    value.clone()
+                };
+                *value = encrypt_with(&self.cipher, &plain);
+            }
+        }
+        if let Some(value) = migrated.ai_key.as_mut() {
+            let plain = if value.starts_with(PREFIX) {
+                decrypt_with(legacy_cipher, value).ok_or(())?
+            } else {
+                value.clone()
+            };
+            *value = encrypt_with(&self.cipher, &plain);
+        }
+        self.data = migrated;
+        Ok(())
+    }
+}
+
+fn read_settings(path: &Path) -> (Settings, Option<String>) {
+    match fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(data) => (data, None),
+            Err(error) => {
+                let _ = fs::rename(path, path.with_extension("json.bad"));
+                (Settings::default(), Some(format!("{error}; starting from defaults")))
+            }
+        },
+        Err(_) => (Settings::default(), None),
+    }
+}
+
+fn load_or_create_key(settings_path: &Path) -> io::Result<([u8; 32], bool)> {
+    let path = settings_path.with_file_name("settings.key");
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            let key: [u8; 32] = Aes256Gcm::generate_key(&mut OsRng).into();
+            file.write_all(&key)?;
+            file.sync_all()?;
+            if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                if let Ok(dir) = fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+            Ok((key, true))
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            for attempt in 0..10 {
+                let read_key = (|| {
+                    let mut bytes = Vec::new();
+                    fs::File::open(&path)?.read_to_end(&mut bytes)?;
+                    if bytes.len() != 32 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "settings key must be 32 bytes",
+                        ));
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+                    }
+                    let mut key = [0; 32];
+                    key.copy_from_slice(&bytes);
+                    Ok(key)
+                })();
+                match read_key {
+                    Ok(key) => return Ok((key, false)),
+                    Err(error) if error.kind() == io::ErrorKind::InvalidData && attempt < 9 => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            unreachable!()
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn cipher_for(key: &[u8; 32]) -> Aes256Gcm {
+    Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key))
+}
+
+fn encrypt_with(cipher: &Aes256Gcm, plain: &str) -> String {
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let sealed = cipher
+        .encrypt(&nonce, plain.as_bytes())
+        .expect("AES-GCM encryption does not fail");
+    let mut blob = nonce.to_vec();
+    blob.extend_from_slice(&sealed);
+    format!("{PREFIX}{}", hex::encode(blob))
+}
+
+fn decrypt_with(cipher: &Aes256Gcm, stored: &str) -> Option<String> {
+    let blob = hex::decode(stored.strip_prefix(PREFIX)?).ok()?;
+    if blob.len() < 12 {
+        return None;
+    }
+    let (nonce, sealed) = blob.split_at(12);
+    let plain = cipher.decrypt(Nonce::from_slice(nonce), sealed).ok()?;
+    String::from_utf8(plain).ok()
 }
 
 #[cfg(test)]
@@ -322,6 +509,28 @@ mod tests {
 
     fn form(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn ai_key_is_encrypted_private_and_forgettable() {
+        let path = tmp("ai-key");
+        let mut store = SettingsStore::open_with_key(&path, [11; 32]);
+        store.set_ai_key("example-not-a-real-provider-key");
+        store.save().unwrap();
+        assert!(!fs::read_to_string(&path)
+            .unwrap()
+            .contains("example-not-a-real-provider-key"));
+        assert!(!serde_json::to_string(&store.public())
+            .unwrap()
+            .contains("example-not-a-real-provider-key"));
+        assert_eq!(
+            SettingsStore::open_with_key(&path, [11; 32]).ai_key().as_deref(),
+            Some("example-not-a-real-provider-key")
+        );
+        assert!(SettingsStore::open_with_key(&path, [12; 32]).ai_key().is_none());
+        store.forget_ai_key();
+        store.save().unwrap();
+        assert!(SettingsStore::open_with_key(&path, [11; 32]).ai_key().is_none());
     }
 
     #[test]
@@ -392,6 +601,69 @@ mod tests {
         let other = SettingsStore::open_with_key(&path, [4; 32]);
         assert!(other.credentials(BrokerId::Binance).is_empty());
         assert!(other.public().brokers[&BrokerId::Binance].unreadable);
+    }
+
+    #[test]
+    fn open_uses_persistent_random_local_key() {
+        let path = tmp("local-key");
+        let other_path = tmp("local-key-other");
+        let mut store = SettingsStore::open(&path);
+        store.apply_form(BrokerId::Binance, &form(&[("api_key", "local-key-value")]));
+        store.set_ai_key("local-ai-key");
+        store.save().unwrap();
+
+        let key_path = path.with_file_name("settings.key");
+        let key = fs::read(&key_path).unwrap();
+        assert_eq!(key.len(), 32);
+        assert_ne!(key, machine_key());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let reopened = SettingsStore::open(&path);
+        assert_eq!(reopened.credentials(BrokerId::Binance)["api_key"], "local-key-value");
+        assert_eq!(reopened.ai_key().as_deref(), Some("local-ai-key"));
+
+        SettingsStore::open(&other_path);
+        assert_ne!(key, fs::read(other_path.with_file_name("settings.key")).unwrap());
+    }
+
+    #[test]
+    fn missing_local_key_migrates_legacy_machine_encrypted_credentials() {
+        let path = tmp("legacy-key");
+        let mut legacy = SettingsStore::open_with_key(&path, machine_key());
+        legacy.apply_form(BrokerId::Binance, &form(&[("api_key", "legacy-api-key")]));
+        legacy.set_ai_key("legacy-ai-key");
+        legacy.save().unwrap();
+        let old_text = fs::read_to_string(&path).unwrap();
+
+        let migrated = SettingsStore::open(&path);
+        assert_eq!(migrated.credentials(BrokerId::Binance)["api_key"], "legacy-api-key");
+        assert_eq!(migrated.ai_key().as_deref(), Some("legacy-ai-key"));
+        assert_ne!(fs::read_to_string(&path).unwrap(), old_text);
+        assert_eq!(
+            SettingsStore::open(&path).credentials(BrokerId::Binance)["api_key"],
+            "legacy-api-key"
+        );
+    }
+
+    #[test]
+    fn corrupt_local_key_marks_credentials_unreadable_and_blocks_save() {
+        let path = tmp("corrupt-key");
+        let mut original = SettingsStore::open_with_key(&path, [9; 32]);
+        original.apply_form(BrokerId::Binance, &form(&[("api_key", "keep-this-ciphertext")]));
+        original.save().unwrap();
+        let settings_before = fs::read(&path).unwrap();
+        let key_path = path.with_file_name("settings.key");
+        fs::write(&key_path, [0; 32]).unwrap();
+
+        let broken = SettingsStore::open(&path);
+        assert!(broken.credentials(BrokerId::Binance).is_empty());
+        assert!(broken.public().brokers[&BrokerId::Binance].unreadable);
+        assert!(broken.save().is_err());
+        assert_eq!(fs::read(&path).unwrap(), settings_before);
+        assert_eq!(fs::read(&key_path).unwrap(), [0; 32]);
     }
 
     #[test]

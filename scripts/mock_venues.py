@@ -92,6 +92,12 @@ class Handler(BaseHTTPRequestHandler):
             rows = bars(q["interval"], int(q.get("limit", 500)))
             return self.reply(200, [[t * 1000, f"{o:.2f}", f"{h:.2f}", f"{lo:.2f}", f"{c:.2f}", f"{v:.3f}",
                                      t * 1000 + 59999, "0", 0, "0", "0", "0"] for t, o, h, lo, c, v in rows])
+        if path == "/binance/fapi/v1/depth":
+            if q.get("symbol") != "XAUUSDT" or q.get("limit") != "500":
+                return self.reply(400, {"code": -1, "msg": "unexpected depth parameters"})
+            return self.reply(200, {"lastUpdateId": 123456, "E": now_ms,
+                                    "bids": [["4293.10", "2.5"], ["4293.00", "3"], ["4292.90", "18"], ["4292.80", "1"]],
+                                    "asks": [["4293.20", "1.5"], ["4293.30", "4"], ["4293.40", "24"], ["4293.50", "1"]]})
         if path == "/binance/fapi/v2/balance":
             if self.binance_signed(url, q):
                 self.reply(200, [{"asset": "USDT", "balance": "1250.40", "availableBalance": "1250.40"}])
@@ -117,6 +123,12 @@ class Handler(BaseHTTPRequestHandler):
             lst = [[str(t * 1000), f"{o:.2f}", f"{h:.2f}", f"{lo:.2f}", f"{c:.2f}", f"{v:.3f}", "0"]
                    for t, o, h, lo, c, v in reversed(rows)]
             return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {"list": lst}})
+        if path == "/bybit/v5/market/orderbook":
+            if q.get("category") != "linear" or q.get("symbol") != "XAUUSDT" or q.get("limit") != "200":
+                return self.reply(400, {"retCode": 10001, "retMsg": "unexpected depth parameters"})
+            return self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {
+                "s": "XAUUSDT", "b": [["4293.10", "2.5"], ["4293.00", "3"], ["4292.90", "18"], ["4292.80", "1"]],
+                "a": [["4293.20", "1.5"], ["4293.30", "4"], ["4293.40", "24"], ["4293.50", "1"]], "ts": now_ms}})
         if path == "/bybit/v5/user/query-api":
             if self.bybit_signed(url):
                 self.reply(200, {"retCode": 0, "retMsg": "OK", "result": {

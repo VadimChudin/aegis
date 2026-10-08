@@ -22,8 +22,10 @@
         </div>
         <div class="chrome-center">
           <div class="broker-dots" id="brokerDots"></div>
+          <button class="density-open" id="btnDensities" type="button" title="Density screener">Densities</button>
         </div>
         <div class="chrome-right">
+          <button class="ghost" id="btnAiStop" type="button" title="Stop new decisions; open positions remain protected"><span data-i18n>Stop</span></button>
           <span class="lamp" id="feedLamp" data-on="0" title="Offline"></span>
           <button class="cta" id="btnBrokers" type="button" data-i18n>Brokers</button>
           <button class="ghost-round" id="btnMenu" type="button" title="Menu" data-i18n-title>
@@ -35,6 +37,8 @@
           </button>
         </div>
       </header>
+
+      <div class="browser-notice" id="browserNotice" role="status" hidden></div>
 
       <main class="stage">
         <aside class="rail glass" id="rail">
@@ -74,6 +78,7 @@
         <div class="stat"><span data-i18n>Brokers</span><strong id="statBrokers">0 / 3</strong></div>
         <div class="stat"><span data-i18n>Chart</span><strong id="statChart">—</strong></div>
         <div class="stat"><span data-i18n>Last</span><strong id="statLast">—</strong></div>
+        <div class="stat ai-account" id="aiAccount" hidden><span id="aiAccountLabel">RoboForex</span><strong id="aiAccountValue">—</strong></div>
         <div class="log" id="log"></div>
       </footer>
     </div>
@@ -96,7 +101,14 @@
     <script src="vendor/lightweight-charts.standalone.production.js"></script>
     <script src="i18n.js"></script>
     <script src="i18n-dict.js"></script>
+    <script src="structural-i18n.js"></script>
     <script src="app.js"></script>
     <script src="bounce.js"></script>
+    <script src="local-ai.js"></script>
+    <script src="observer.js"></script>
+    <link rel="stylesheet" href="observer.css">
+    <script src="structural.js"></script>
+    <script src="ai.js"></script>
+    <link rel="stylesheet" href="ai.css">
   </body>
 </html>
