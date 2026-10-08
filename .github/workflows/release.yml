@@ -36,7 +36,8 @@ jobs:
               if (error.status !== 404) throw error;
             }
             try {
-              const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: `tags/${tag}` });
+              await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+              const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: tag });
               if (commit.sha !== context.sha) throw new Error(`Existing ${tag} does not point to this checkout; refusing release`);
             } catch (error) {
               if (error.status !== 404) throw error;
@@ -185,7 +186,7 @@ jobs:
             const tag = process.env.RELEASE_TAG;
             const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
             if (!release.draft) throw new Error(`Release ${tag} is not a draft; refusing to republish`);
-            const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: `tags/${tag}` });
+            const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: tag });
             if (commit.sha !== context.sha) throw new Error(`Tag ${tag} does not point to the tested checkout`);
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
             for (const extension of ['.exe', '.deb', '.dmg']) {
