@@ -174,7 +174,7 @@ class AiSetupRegressionTests(unittest.TestCase):
             assert binary == "/fake/ollama"
             assert args == [binary, "serve"]
             assert env["OLLAMA_HOST"] == "127.0.0.1:11434"
-            assert env["OLLAMA_MODELS"] == str(tmp_path / "models")
+            assert env["OLLAMA_MODELS"] == str((tmp_path / "models").resolve())
             assert env["OLLAMA_NO_CLOUD"] == "1"
 
     def test_windows_is_explicitly_unsupported_on_this_branch(self):
@@ -246,7 +246,7 @@ class AiSetupRegressionTests(unittest.TestCase):
                 ai_setup.setup(tmp_path)
             launch = json.loads((tmp_path / "launch.json").read_text())
             assert launch["args"] == ["serve"]
-            assert launch["models"] == str(tmp_path / "models")
+            assert launch["models"] == str((tmp_path / "models").resolve())
             assert launch["host"] == host
             assert launch["no_cloud"] == "1"
             assert mock.call("ready", 100) in emit.call_args_list
@@ -263,14 +263,14 @@ class AiSetupRegressionTests(unittest.TestCase):
                  mock.patch.object(ai_setup, "_api_reachable", return_value=False), \
                  mock.patch.object(ai_setup, "_wait_for_api", return_value=False), \
                  mock.patch.object(ai_setup.subprocess, "Popen", return_value=process) as spawn, \
-                 mock.patch.object(ai_setup.os, "killpg") as kill, \
+                 mock.patch.object(ai_setup.os, "killpg", create=True) as kill, \
                  mock.patch.object(ai_setup, "_pull_model") as pull, \
                  mock.patch.object(ai_setup, "_emit"):
                 with self.assertRaisesRegex(ai_setup.SetupError, "did not start"):
                     ai_setup.setup(tmp_path)
             assert spawn.call_args.args[0] == ["/fake/ollama", "serve"]
             assert spawn.call_args.kwargs["start_new_session"] is True
-            assert spawn.call_args.kwargs["env"]["OLLAMA_MODELS"] == str(tmp_path / "models")
+            assert spawn.call_args.kwargs["env"]["OLLAMA_MODELS"] == str((tmp_path / "models").resolve())
             kill.assert_called_once_with(process.pid, ai_setup.signal.SIGTERM)
             process.wait.assert_called_once_with(timeout=10)
             pull.assert_not_called()
