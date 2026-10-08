@@ -612,6 +612,9 @@ impl Runtime {
         if value["done_reason"] == "length" {
             return Err("Model output exceeded token limit; no action accepted".into());
         }
+        if value["done"] != true || value["done_reason"] != "stop" {
+            return Err("Observer inference did not finish successfully; no action accepted".into());
+        }
         let used = value["prompt_eval_count"].as_u64().unwrap_or(0);
         if used > 3_700 {
             return Err("Model input exhausted context budget; no action accepted".into());
@@ -1001,3 +1004,7 @@ mod tests {
         assert!(!has_model(&json!({"models":[{"name":"qwen3:4b"}]})));
     }
 }
+
+#[cfg(test)]
+#[path = "local_ai_audit_tests.rs"]
+mod audit_tests;

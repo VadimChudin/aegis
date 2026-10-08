@@ -31,3 +31,6 @@ pub use checks::{Check, CheckStatus};
 pub use market::{Candle, Timeframe};
 pub use market_depth::{BookLevel, DepthLevel, OrderBook, OrderBookSnapshot};
 pub use settings::{PublicSettings, SettingsStore};
+
+#[cfg(test)]
+mod audit_http_fixture;

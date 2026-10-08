@@ -1005,16 +1005,7 @@ async fn decision_loop(app: AppHandle) {
                 }
             }
         }
-        if let Some(frames) = input.pointer_mut("/snapshot/frames").and_then(Value::as_array_mut) {
-            for frame in frames {
-                let value = json!({
-                    "timeframe":frame["timeframe"],"closed_at_ms":frame["closed_at_ms"],
-                    "OHLC":[frame["last_closed"]["open"],frame["last_closed"]["high"],frame["last_closed"]["low"],frame["last_closed"]["close"]],
-                    "S":frame["support"],"R":frame["resistance"],"ATR":frame["atr"],"trend":frame["trend"]
-                });
-                *frame = value;
-            }
-        }
+        observer::compact_payload(&mut input);
         if let Some(market) = input.pointer_mut("/snapshot/market").and_then(Value::as_object_mut) {
             market.remove("ticks");
             market.remove("book_note");

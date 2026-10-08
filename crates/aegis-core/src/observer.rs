@@ -1334,6 +1334,30 @@ fn finite_nonnegative(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
+/// Compact display-independent model frame summaries before transport.
+/// Called by the desktop observer for both local and cloud requests.
+pub fn compact_payload(input: &mut Value) {
+    if let Some(frames) = input.pointer_mut("/snapshot/frames").and_then(Value::as_array_mut) {
+        for frame in frames {
+            let mut value = json!({
+                "timeframe":frame["timeframe"],"closed_at_ms":frame["closed_at_ms"],
+                "OHLC":[frame["last_closed"]["open"],frame["last_closed"]["high"],frame["last_closed"]["low"],frame["last_closed"]["close"]],
+                "S":frame["support"],"R":frame["resistance"],"ATR":frame["atr"],"trend":frame["trend"]
+            });
+            // request_payload already bounds these fields: three context bars,
+            // and at most the source summary's 20 closed bars for the data SPA.
+            // Dropping them makes both models review less evidence than the
+            // deterministic validator and contradicts the system prompt.
+            for field in ["context_candles", "closed_bars", "closed_count"] {
+                if let Some(evidence) = frame.get(field) {
+                    value[field] = evidence.clone();
+                }
+            }
+            *frame = value;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
