@@ -9,9 +9,10 @@ name: release
   workflow_dispatch:
 
 # The branch-created tag uses GITHUB_TOKEN and normally does not retrigger push.
-# Supersede obsolete branch/tag/manual runs; never bypass verification or republish assets.
+# Isolate by tested commit so a stalled obsolete verification cannot block the current one.
+# Preflight and final publication still bind the immutable tag to the tested SHA.
 concurrency:
-  group: release-${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || github.ref_name }}
+  group: release-${{ github.ref == 'refs/heads/release/0.7.0-beta.5' && 'v0.7.0-beta.5' || github.ref_name }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
