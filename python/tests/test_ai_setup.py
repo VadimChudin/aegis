@@ -92,7 +92,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = ai_setup.runtime_environment(Path(tmp) / "ai-runtime")
         self.assertEqual(env["OLLAMA_HOST"], "127.0.0.1:11434")
-        self.assertEqual(env["OLLAMA_MODELS"], str(Path(tmp) / "ai-runtime" / "models"))
+        self.assertEqual(env["OLLAMA_MODELS"], str((Path(tmp) / "ai-runtime" / "models").resolve()))
         self.assertEqual(env["OLLAMA_NO_CLOUD"], "1")
 
     def test_setup_rejects_model_directory_symlink(self):
@@ -189,7 +189,7 @@ class RuntimeTests(unittest.TestCase):
             binary = ai_setup._ensure_runtime_entrypoint(root, str(system_binary))
             self.assertEqual(Path(binary), root / "runtime" / "bin" / "ollama")
             self.assertTrue(Path(binary).is_symlink())
-            self.assertEqual(Path(binary).resolve(), system_binary)
+            self.assertEqual(Path(binary).resolve(), system_binary.resolve())
 
     def test_install_runtime_extracts_into_a_new_stage_and_cleans_it(self):
         archive_stream = make_tar([("bin/ollama", "file", b"ollama binary")])

@@ -8,6 +8,11 @@ pub mod bounce;
 pub mod broker;
 pub mod checks;
 pub mod density;
+pub mod event_archive;
+pub mod event_cycle;
+pub mod event_scoring;
+pub mod event_telemetry;
+pub mod event_tools;
 pub mod live_market;
 pub mod local_ai;
 pub mod market;
@@ -31,3 +36,6 @@ pub use checks::{Check, CheckStatus};
 pub use market::{Candle, Timeframe};
 pub use market_depth::{BookLevel, DepthLevel, OrderBook, OrderBookSnapshot};
 pub use settings::{PublicSettings, SettingsStore};
+
+#[cfg(test)]
+mod audit_http_fixture;

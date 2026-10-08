@@ -30,6 +30,16 @@ pub struct ObserverConfig {
     /// At 100, every required strategy rule must be confirmed by price data.
     /// At 0, the model may choose freely, subject to the same safety checks.
     pub strictness: u8,
+    #[serde(default)]
+    pub event_paper_enabled: bool,
+    #[serde(default = "default_event_window")]
+    pub event_window_hours: u64,
+    #[serde(default = "default_event_cooldown")]
+    pub event_cooldown_seconds: u64,
+    #[serde(default = "default_event_budget")]
+    pub event_cloud_calls_per_hour: u32,
+    #[serde(default)]
+    pub event_allow_partial_coverage: bool,
     pub strategies: Vec<StrategyConfig>,
     /// Percent of equity at risk per paper position; capped at 1%.
     pub risk_pct: f64,
@@ -73,6 +83,15 @@ pub struct StrategyPrompt {
     pub timeframes: Vec<String>,
 }
 
+fn default_event_window() -> u64 {
+    2
+}
+fn default_event_cooldown() -> u64 {
+    300
+}
+fn default_event_budget() -> u32 {
+    5
+}
 fn default_mode() -> String {
     "paper".into()
 }
@@ -120,6 +139,11 @@ impl Default for ObserverConfig {
         let timeframes = Timeframe::ALL.to_vec();
         Self {
             strictness: 100,
+            event_paper_enabled: false,
+            event_window_hours: default_event_window(),
+            event_cooldown_seconds: default_event_cooldown(),
+            event_cloud_calls_per_hour: default_event_budget(),
+            event_allow_partial_coverage: false,
             strategies: vec![
                 strategy_config("density_bounce", "Ищи отбой цены от подтверждённого уровня. При наличии стакана учитывай реальную плотность; без стакана используй только явно названный ценовой прокси из прошлых экстремумов, не называй его плотностью. Вход только после закрытого бара с отбоем; иначе жди.", timeframes.clone()),
                 strategy_config("structural", "Ищи структурный разворот: вынос прошлого swing-экстремума, возврат за него и подтверждённый сдвиг закрытия. Не считай один прокол разворотом; при отсутствии всех признаков жди.", timeframes.clone()),
@@ -141,6 +165,13 @@ impl Default for ObserverConfig {
 
 impl ObserverConfig {
     pub fn validate(&self) -> Result<(), String> {
+        if (self.event_paper_enabled && self.mode != "paper")
+            || !matches!(self.event_window_hours, 2 | 3 | 10)
+            || !(30..=86400).contains(&self.event_cooldown_seconds)
+            || !(1..=60).contains(&self.event_cloud_calls_per_hour)
+        {
+            return Err("Event mode is Paper-only; windows 2/3/10h, cooldown 30..86400s, budget 1..60/hour".into());
+        }
         if self.strictness > 100 {
             return Err("strictness must be between 0 and 100".into());
         }
@@ -1334,8 +1365,32 @@ fn finite_nonnegative(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
+/// Compact display-independent model frame summaries before transport.
+/// Called by the desktop observer for both local and cloud requests.
+pub fn compact_payload(input: &mut Value) {
+    if let Some(frames) = input.pointer_mut("/snapshot/frames").and_then(Value::as_array_mut) {
+        for frame in frames {
+            let mut value = json!({
+                "timeframe":frame["timeframe"],"closed_at_ms":frame["closed_at_ms"],
+                "OHLC":[frame["last_closed"]["open"],frame["last_closed"]["high"],frame["last_closed"]["low"],frame["last_closed"]["close"]],
+                "S":frame["support"],"R":frame["resistance"],"ATR":frame["atr"],"trend":frame["trend"]
+            });
+            // request_payload already bounds these fields: three context bars,
+            // and at most the source summary's 20 closed bars for the data SPA.
+            // Dropping them makes both models review less evidence than the
+            // deterministic validator and contradicts the system prompt.
+            for field in ["context_candles", "closed_bars", "closed_count"] {
+                if let Some(evidence) = frame.get(field) {
+                    value[field] = evidence.clone();
+                }
+            }
+            *frame = value;
+        }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::live_market::{Quote, Tick};
     use crate::market_depth::{BookLevel, OrderBookSnapshot};
@@ -1394,7 +1449,7 @@ mod tests {
             .collect()
     }
 
-    fn snapshot(now_ms: u64) -> Snapshot {
+    pub(crate) fn snapshot(now_ms: u64) -> Snapshot {
         let market = sample(now_ms);
         let frame = summarize(Timeframe::M1, &candles(24, 1_700_000_000), now_ms).unwrap();
         Snapshot {

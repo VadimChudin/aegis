@@ -48,6 +48,7 @@ class Bridge:
         self.symbol = None
         self.offset = 0
         self._ledger_path = None
+        self._account_identity = None
 
     def mt5(self):
         if self._mt5 is None:
@@ -70,6 +71,7 @@ class Bridge:
         return reply
 
     def connect(self, req):
+        self._account_identity = None
         mt5 = self.mt5()
         kwargs = {
             "login": int(req["login"]),
@@ -86,6 +88,7 @@ class Bridge:
         self.symbol = self._find_symbol(mt5)
         self.offset = self._server_offset(mt5)
         info = mt5.account_info()
+        self._account_identity = (int(info.login), str(info.server)) if info else None
         identity = f"{info.login}:{info.server}" if info else str(kwargs["login"])
         root = Path(os.environ.get("AEGIS_TRADE_LEDGER_DIR", Path.home() / ".aegis" / "trade-ledger"))
         self._ledger_path = root / (hashlib.sha256(identity.encode()).hexdigest() + ".json")
@@ -212,6 +215,80 @@ class Bridge:
             }
         finally:
             mt5.market_book_release(self.symbol)
+
+    def history_ticks(self, req):
+        """Bounded UTC slice, never a claim of complete exchange tape."""
+        if not self.symbol:
+            raise BridgeError("not connected")
+        start = req.get("start_ms")
+        end = req.get("end_ms")
+        limit = req.get("max_ticks", 512)
+        if any(isinstance(x, bool) or not isinstance(x, int) for x in (start, end, limit)):
+            raise BridgeError("history bounds and max_ticks must be integers")
+        now_ms = time.time_ns() // 1_000_000
+        if start <= 0 or end <= start or end - start > 10 * 3600 * 1000 or end > now_ms + 2000:
+            raise BridgeError("history slice requires positive UTC bounds, at most 10 hours, not future data")
+        if not 1 <= limit <= 2000:
+            raise BridgeError("max_ticks must be 1..2000")
+        if req.get("symbol", self.symbol) != self.symbol:
+            raise BridgeError("history source symbol mismatch")
+        mt5 = self.mt5()
+        def verify_account():
+            account = mt5.account_info()
+            if account is None or self._account_identity is None or (int(account.login), str(account.server)) != self._account_identity:
+                raise BridgeError("MT5 account changed; reconnect before requesting history")
+        verify_account()
+        terminal = mt5.terminal_info()
+        if terminal is None or not terminal.connected:
+            raise BridgeError("MT5 terminal is disconnected")
+        copy_ticks = getattr(mt5, "copy_ticks_from", None)
+        if copy_ticks is None:
+            raise BridgeError("MT5 tick history API unavailable")
+        since = datetime.fromtimestamp(start / 1000, timezone.utc)
+        try:
+            history = copy_ticks(self.symbol, since, limit + 1, mt5.COPY_TICKS_ALL)
+        except Exception as exc:
+            raise BridgeError("MT5 tick history request failed") from exc
+        verify_account()
+        if history is None:
+            raise BridgeError("MT5 tick history unavailable")
+        ticks = []
+        invalid = 0
+        outside = 0
+        inspected = 0
+        previous = None
+        for row in history:
+            inspected += 1
+            if inspected > limit + 1:
+                break
+            try:
+                data = row if isinstance(row, dict) else dict(zip(row.dtype.names, row))
+                stamp = data.get("time_msc") or int(data.get("time", 0)) * 1000
+                stamp = int(stamp)
+                bid, ask = float(data["bid"]), float(data["ask"])
+                last = float(data.get("last", 0)) or None
+                volume = float(data.get("volume_real", data.get("volume", 0)))
+                if stamp < start or stamp > end:
+                    outside += 1
+                    continue
+                if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask < bid or (last is not None and (not math.isfinite(last) or last <= 0)) or not math.isfinite(volume) or volume < 0:
+                    invalid += 1
+                    continue
+                if previous is not None and stamp < previous:
+                    invalid += 1
+                    continue
+                previous = stamp
+                ticks.append({"time_ms":stamp,"bid":bid,"ask":ask,"last":last,"volume":volume})
+            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+                invalid += 1
+        truncated = len(ticks) > limit or inspected > limit
+        result = {"symbol":self.symbol,"start_ms":start,"end_ms":end,"observed_at_ms":time.time_ns() // 1_000_000,
+                  "ticks":ticks[:limit],"truncated":truncated,"complete_history":False,
+                  "volume_kind":"mt5_ticks_not_exchange_tape",
+                  "coverage_note":f"Bounded first ticks from requested UTC slice; full history not established; invalid_rows={invalid}; outside_rows={outside}"}
+        if len(json.dumps(result).encode("utf-8")) > 384 * 1024:
+            raise BridgeError("MT5 historical tick response exceeds byte budget")
+        return result
 
     def market_snapshot(self, _req):
         if not self.symbol:
@@ -544,6 +621,8 @@ class Bridge:
             raise BridgeError("MT5 terminal is disconnected")
         if account is None or not account.trade_allowed or not account.trade_expert:
             raise BridgeError("MT5 account trading is not allowed")
+        if self._account_identity is None or (int(account.login), str(account.server)) != self._account_identity:
+            raise BridgeError("MT5 account identity changed; reconnect before trading")
         if require_algo and not terminal.trade_allowed:
             raise BridgeError("MT5 automated trading is not enabled for this terminal/account")
         if self.symbol != TRADE_SYMBOL:
@@ -551,6 +630,17 @@ class Bridge:
         if require_usd and account.currency != "USD":
             raise BridgeError("automated risk sizing currently requires a USD account")
         return account
+
+    def _check_daily_loss(self, mt5, account, positions, loss_limit):
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        history = mt5.history_deals_get(today, datetime.now(timezone.utc))
+        if history is None:
+            raise BridgeError("MT5 could not confirm today's XAUUSD profit and loss")
+        daily_profit = sum(float(d.profit) + float(getattr(d, "commission", 0)) + float(getattr(d, "swap", 0))
+                           for d in history if d.symbol == self.symbol)
+        daily_profit += sum(float(p.profit) for p in positions if int(p.magic) == MAGIC)
+        if loss_limit and daily_profit <= -(float(account.balance) * loss_limit / 100):
+            raise BridgeError("daily loss limit reached")
 
     def place_order(self, req):
         mt5 = self.mt5()
@@ -615,15 +705,7 @@ class Bridge:
         exposure_room = float(account.equity) * 10 - current_notional
         if exposure_room <= 0:
             raise BridgeError("maximum aggregate XAUUSD notional exposure reached")
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        history = mt5.history_deals_get(today, datetime.now(timezone.utc))
-        if history is None:
-            raise BridgeError("MT5 could not confirm today's XAUUSD profit and loss")
-        daily_profit = sum(float(d.profit) + float(getattr(d, "commission", 0)) + float(getattr(d, "swap", 0))
-                           for d in history if d.symbol == self.symbol)
-        daily_profit += sum(float(p.profit) for p in positions if int(p.magic) == MAGIC)
-        if loss_limit and daily_profit <= -(float(account.balance) * loss_limit / 100):
-            raise BridgeError("daily loss limit reached")
+        self._check_daily_loss(mt5, account, positions, loss_limit)
         per_lot = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
                                         self.symbol, 1.0, entry, stop)
         if per_lot is None or not math.isfinite(float(per_lot)) or float(per_lot) >= 0:
@@ -750,6 +832,8 @@ class Bridge:
                 ending_notional += float(position.volume) * float(info.trade_contract_size) * float(position.price_current)
             if ending_risk > float(account_end.equity) * 0.05 or ending_notional > float(account_end.equity) * 10:
                 return self._trade_result(request_id, "rejected", -1, "aggregate exposure limits changed before send")
+            self._check_daily_loss(mt5, account_end, positions_end, loss_limit)
+            self._trading_permission(mt5)
             mark_dispatched()
             result = mt5.order_send(order)
             if result is None:
@@ -999,6 +1083,7 @@ class Bridge:
         if self._mt5 is not None:
             self._mt5.shutdown()
         self.symbol = None
+        self._account_identity = None
         return {}
 
 
@@ -1009,6 +1094,7 @@ def serve(bridge, stdin, stdout):
         "candles": bridge.candles,
         "order_book": bridge.order_book,
         "market_snapshot": bridge.market_snapshot,
+        "history_ticks": bridge.history_ticks,
         "trading_state": bridge.trading_state,
         "place_order": bridge.place_order,
         "close_position": bridge.close_position,

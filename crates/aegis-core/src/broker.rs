@@ -427,6 +427,21 @@ impl Connector {
         }
     }
 
+    /// Optional read-only history capability. Unsupported connectors return None.
+    pub async fn history_ticks(
+        &self,
+        start_ms: u64,
+        end_ms: u64,
+        max_ticks: usize,
+    ) -> Result<Option<crate::event_tools::HistoryTicks>, BrokerError> {
+        crate::event_tools::validate_history_request(start_ms, end_ms, max_ticks, crate::sign::now_ms().max(0) as u64)
+            .map_err(BrokerError::Input)?;
+        match self {
+            Connector::Roboforex(c) => c.history_ticks(start_ms, end_ms, max_ticks).await.map(Some),
+            _ => Ok(None),
+        }
+    }
+
     /// Returns a validated point-in-time market-depth snapshot for the connected symbol.
     pub async fn order_book(&self) -> Result<OrderBookSnapshot, BrokerError> {
         match self {

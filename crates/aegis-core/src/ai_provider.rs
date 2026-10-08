@@ -136,7 +136,11 @@ async fn consult_at(
         bytes.extend_from_slice(&chunk);
     }
     let body: Value = serde_json::from_slice(&bytes).map_err(|_| "OpenRouter returned invalid JSON".to_string())?;
-    if body.pointer("/choices/0/finish_reason").and_then(Value::as_str) == Some("length") {
+    if body.get("error").is_some_and(|error| !error.is_null()) {
+        return Err("OpenRouter returned an error envelope; no action accepted".into());
+    }
+    let finish_reason = body.pointer("/choices/0/finish_reason").and_then(Value::as_str);
+    if finish_reason == Some("length") {
         return Err("OpenRouter response was truncated".into());
     }
     let content = body
@@ -145,6 +149,9 @@ async fn consult_at(
         .ok_or_else(|| "OpenRouter response has no decision content".to_string())?;
     if content.len() > MAX_RESPONSE_BYTES {
         return Err("OpenRouter decision content exceeds the size limit".into());
+    }
+    if finish_reason != Some("stop") {
+        return Err("OpenRouter response did not finish successfully; no action accepted".into());
     }
     Ok(ProviderAnswer {
         response: content.to_owned(),
@@ -236,4 +243,19 @@ mod tests {
         assert!(consult("key", "x", "y", 0).await.is_err());
         assert!(consult("key", &"x".repeat(MAX_PROMPT_BYTES), "y", 5).await.is_err());
     }
+}
+
+#[cfg(test)]
+#[path = "ai_provider_audit_tests.rs"]
+mod audit_tests;
+
+#[cfg(test)]
+pub(crate) async fn audit_consult_at(
+    endpoint: &str,
+    prompt: &str,
+    system: &str,
+    timeout_secs: u64,
+) -> Result<ProviderAnswer, String> {
+    assert!(endpoint.starts_with("http://127.0.0.1:"));
+    consult_at(endpoint, "fixture-key", prompt, system, timeout_secs).await
 }
